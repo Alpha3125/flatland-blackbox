@@ -1,7 +1,7 @@
 flatland-rl==4.0.3
 networkx
 pytest
-pytorch
+torch
 torchvision
 scipy
 tqdm

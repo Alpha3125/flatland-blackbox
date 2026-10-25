@@ -31,3 +31,13 @@ build/
 mapf_benchmarks/
 
 results/
+
+2.1_Beta_release.pdf  
+README.md          
+main.py  
+pyproject.toml    
+run_configs.json
+LICENSE               
+flatland_blackbox    
+requirements.txt  
+tests

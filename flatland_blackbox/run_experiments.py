@@ -20,6 +20,8 @@ from flatland_blackbox.utils import (
     get_rail_subgraph,
     get_row,
     initialize_environment,
+    load_movingai_map,
+    sample_grid_agents,
     plot_agent_subgraphs,
     print_agents_start,
     shift_overlapping_edts,
@@ -61,21 +63,16 @@ def run_single_experiment(console_output=True, **kwargs):
     lr_ = kwargs["lr"]
     lam_ = kwargs["lam"]
 
-    env = initialize_environment(
-        seed=seed,
-        width=width,
-        height=height,
-        num_agents=num_agents,
-        max_num_cities=max_cities,
-    )
-    env.reset(random_seed=seed)
-    env_copy = deepcopy(env)
+    map_path = kwargs["map_path"]
 
-    agents = env.agents
-    rail_env_graph = RailEnvGraph(env)
-    G_rail = rail_env_graph.graph_rail_grid()  # Or use reduce_simple_paths()
-    nx_rail_graph = get_rail_subgraph(G_rail)
-    solver_graph = add_proxy_nodes(nx_rail_graph, agents)
+    G_rail, free_cells = load_movingai_map(map_path)
+    agents = sample_grid_agents(
+        free_cells,
+        num_agents=kwargs["num_agents"],
+        seed=seed,
+    )
+
+    solver_graph = add_proxy_nodes(G_rail, agents)
 
     # Sort agents by earliest departure time and shift overlapping EDTs.
     sorted_agents = sorted(agents, key=lambda a: a.earliest_departure)

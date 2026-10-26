@@ -11,6 +11,72 @@ from flatland.envs.rail_generators import sparse_rail_generator
 from flatland.graphs.graph_utils import plotGraphEnv
 from flatland.utils.rendertools import RenderTool
 
+import random
+from dataclasses import dataclass
+import networkx as nx
+
+
+@dataclass
+class GridAgent:
+    handle: int
+    initial_position: tuple
+    target: tuple
+    earliest_departure: int = 0
+
+
+def load_movingai_map(map_path):
+    with open(map_path, "r") as f:
+        lines = [line.rstrip("\n") for line in f]
+
+    width = int(next(x.split()[1] for x in lines
+                     if x.startswith("width ")))
+    height = int(next(x.split()[1] for x in lines
+                      if x.startswith("height ")))
+    map_start = next(i for i, x in enumerate(lines)
+                     if x.strip() == "map")
+    rows = lines[map_start + 1:map_start + 1 + height]
+
+    if len(rows) != height or any(len(row) != width for row in rows):
+        raise ValueError("Map dimensions do not match its header.")
+
+    # Moving AI's random map uses '.' for traversable cells
+    free_cells = [
+        (r, c)
+        for r, row in enumerate(rows)
+        for c, cell in enumerate(row)
+        if cell == "."
+    ]
+
+    G = nx.DiGraph()
+
+    for r, c in free_cells:
+        G.add_node((r, c, 0), type="rail")
+
+    for r, c in free_cells:
+        u = (r, c, 0)
+        for dr, dc in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+            v_pos = (r + dr, c + dc)
+            if v_pos in set(free_cells):
+                v = (*v_pos, 0)
+                G.add_edge(u, v, type="dir", l=1.0)
+
+    return G, free_cells
+
+
+def sample_grid_agents(free_cells, num_agents, seed):
+    if len(free_cells) < 2 * num_agents:
+        raise ValueError("Not enough free cells for unique endpoints.")
+
+    rng = random.Random(seed)
+    cells = rng.sample(free_cells, 2 * num_agents)
+
+    return [
+        GridAgent(i, cells[i], cells[num_agents + i])
+        for i in range(num_agents)
+    ]
+
+
+
 
 class NoSolutionError(Exception):
     """Raised when a solver fails to find any solution paths."""
@@ -451,3 +517,56 @@ def print_agents_start(agents):
         print(
             f"Agent {agent.handle} start: {start_rc} end: {end_rc} earliest departure: {agent.earliest_departure}"
         )
+
+
+
+from pathlib import Path
+import networkx as nx
+
+
+def load_movingai_map(map_path):
+    """Load an octile Moving AI map as a NetworkX grid graph."""
+    map_path = Path(map_path)
+
+    with map_path.open("r", encoding="utf-8") as f:
+        lines = [line.rstrip("\n\r") for line in f]
+
+    try:
+        map_header = lines.index("map")
+    except ValueError:
+        raise ValueError(f"No 'map' header found in {map_path}")
+
+    header = {}
+    for line in lines[:map_header]:
+        parts = line.split()
+        if len(parts) == 2:
+            header[parts[0]] = parts[1]
+
+    height = int(header["height"])
+    width = int(header["width"])
+    grid = lines[map_header + 1:map_header + 1 + height]
+
+    if len(grid) != height or any(len(row) != width for row in grid):
+        raise ValueError(
+            f"Map dimensions do not match its header: "
+            f"expected {height} rows of width {width}"
+        )
+
+    # In Moving AI maps, '.' and 'G' are traversable.
+    free_cells = {
+        (r, c)
+        for r, row in enumerate(grid)
+        for c, char in enumerate(row)
+        if char in {".", "G"}
+    }
+
+    G = nx.Graph()
+    G.add_nodes_from(free_cells)
+
+    for r, c in free_cells:
+        for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            neighbor = (r + dr, c + dc)
+            if neighbor in free_cells:
+                G.add_edge((r, c), neighbor)
+
+    return grid, G

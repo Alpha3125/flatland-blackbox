@@ -68,7 +68,7 @@ def sample_grid_agents(free_cells, num_agents, seed):
         raise ValueError("Not enough free cells for unique endpoints.")
 
     rng = random.Random(seed)
-    cells = rng.sample(free_cells, 2 * num_agents)
+    cells = rng.sample(sorted(free_cells), 2 * num_agents)
 
     return [
         GridAgent(i, cells[i], cells[num_agents + i])

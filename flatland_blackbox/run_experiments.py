@@ -65,6 +65,8 @@ def run_single_experiment(console_output=True, **kwargs):
     map_path = kwargs["map_path"]
 
     G_rail, free_cells = load_movingai_map(map_path)
+    print("G_rail type:", type(G_rail))
+    print("free_cells type:", type(free_cells))
     agents = sample_grid_agents(
         free_cells,
         num_agents=kwargs["num_agents"],

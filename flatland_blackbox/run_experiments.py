@@ -62,7 +62,6 @@ def run_single_experiment(console_output=True, **kwargs):
     iters_ = kwargs["iters"]
     lr_ = kwargs["lr"]
     lam_ = kwargs["lam"]
-
     map_path = kwargs["map_path"]
 
     G_rail, free_cells = load_movingai_map(map_path)
@@ -161,8 +160,7 @@ def run_single_experiment(console_output=True, **kwargs):
 
         return flow_time_pp, flow_time_cbs, flow_time_fpp
 
-
-def run_experiment_config(config, iters, lr, lam):
+def run_experiment_config(config, iters, lr, lam, map_path):
     """
     Runs a single experiment configuration.
 
@@ -190,6 +188,7 @@ def run_experiment_config(config, iters, lr, lam):
         iters=iters,
         lr=lr,
         lam=lam,
+        map_path=map_path,
     )
     return {
         "seed": seed,
@@ -242,10 +241,11 @@ def run_experiments(max_workers, **kwargs):
     iters = kwargs["iters"]
     lr = kwargs["lr"]
     lam = kwargs["lam"]
+    map_path = kwargs["map_path"]
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(run_experiment_config, config, iters, lr, lam): config
+            executor.submit(run_experiment_config, config, iters, lr, lam,  map_path): config
             for config in all_configs
         }
         for future in tqdm(

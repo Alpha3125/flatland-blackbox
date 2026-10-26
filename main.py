@@ -10,6 +10,14 @@ from flatland_blackbox.run_experiments import (
 
 
 def parse_args():
+
+    parser.add_argument(
+    "--map_path",
+    type=str,
+    default="data/random-32-32-20.map",
+    help="Path to the Moving AI map file.",
+    )
+    
     parser = argparse.ArgumentParser(
         description="Run Flatland experiments, single solves, or training."
     )

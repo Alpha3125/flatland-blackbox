@@ -21,6 +21,7 @@ conda activate flatland-blackbox
 
 ```bash
 pip install -r requirements.txt
+python -m pip install "setuptools<81"
 ```
 
 ## Testing

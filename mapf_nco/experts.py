@@ -24,7 +24,8 @@ from mapf_nco.scenarios import (
     save_dataset,
 )
 from mapf_nco.solver_cbs import solve_cbs
-from mapf_nco.solver_eecbs import check_eecbs, find_eecbs, solve_eecbs, uses_wsl
+from mapf_nco.solver_eecbs import (check_eecbs, explain_missing, find_eecbs, solve_eecbs,
+                                   uses_wsl)
 
 _G = None
 
@@ -78,11 +79,8 @@ def generate_datasets(cfg, agent_counts, workers=None, log=print):
         binary = find_eecbs(cfg.get("eecbs_bin"))
         if binary is None:
             raise FileNotFoundError(
-                "EECBS executable not found. Build it with scripts/build_eecbs.sh "
-                "(on Windows: run it inside WSL, see README 'EECBS on Windows'), or "
-                "pass --eecbs_bin / set MAPF_NCO_EECBS. For small test runs only, "
-                "--expert cbs uses the Python CBS fallback."
-            )
+                explain_missing(cfg.get("eecbs_bin")) + "\nOr pass --eecbs_bin / set "
+                "MAPF_NCO_EECBS. For small test runs only, --expert cbs uses Python CBS.")
         ok, msg = check_eecbs(grid, binary)
         if not ok:
             raise RuntimeError(msg)

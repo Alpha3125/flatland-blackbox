@@ -26,11 +26,15 @@ from mapf_nco.scenarios import write_scen
 
 IS_WINDOWS = sys.platform == "win32"
 
+# Repository root (the folder that contains mapf_nco/), so the default build is
+# found no matter which folder main.py is started from.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_EECBS_DIR = os.path.join(REPO_ROOT, "third_party", "EECBS")
 _DEFAULT_LOCATIONS = [
-    os.path.join("third_party", "EECBS", "build", "Release", "eecbs.exe"),
-    os.path.join("third_party", "EECBS", "build", "eecbs.exe"),
-    os.path.join("third_party", "EECBS", "build", "eecbs"),
-    os.path.join("third_party", "EECBS", "eecbs"),
+    os.path.join(_EECBS_DIR, "build", "Release", "eecbs.exe"),
+    os.path.join(_EECBS_DIR, "build", "eecbs.exe"),
+    os.path.join(_EECBS_DIR, "build", "eecbs"),
+    os.path.join(_EECBS_DIR, "eecbs"),
 ]
 
 _CELL_RE = re.compile(r"\((\d+),(\d+)\)")
@@ -77,6 +81,30 @@ def find_eecbs(explicit=None):
         if (IS_WINDOWS and _is_linux_elf(c)) or os.access(c, os.X_OK):
             return os.path.abspath(c)
     return None
+
+
+def explain_missing(explicit=None):
+    """Human-readable reason why EECBS was not found, with the fix for this OS."""
+    lines = ["EECBS was not found. Looked for:"]
+    for c in [explicit, os.environ.get("MAPF_NCO_EECBS")] + _DEFAULT_LOCATIONS:
+        if not c or (c.endswith(".exe") and not IS_WINDOWS):
+            continue
+        state = "missing"
+        if os.path.isfile(c):
+            state = "exists but is not executable (chmod +x)" if not IS_WINDOWS else "exists"
+        lines.append(f"  - {c}  [{state}]")
+    lines.append("  - 'eecbs' on your PATH  [missing]")
+    if os.path.isdir(_EECBS_DIR) and not os.path.isdir(os.path.join(_EECBS_DIR, "build")):
+        lines.append("third_party/EECBS was downloaded but never built.")
+    elif os.path.isdir(os.path.join(_EECBS_DIR, "build")):
+        lines.append("third_party/EECBS/build exists but has no eecbs program: the build failed "
+                     "(often Boost missing). Re-run the build and read its error.")
+    if IS_WINDOWS:
+        lines.append("Fix (Windows): build it inside WSL, see README 'EECBS on Windows'.")
+    else:
+        lines.append("Fix: bash scripts/build_eecbs.sh   (needs cmake, g++ and Boost; without "
+                     "sudo: conda install -c conda-forge boost cmake, then re-run the script)")
+    return "\n".join(lines)
 
 
 def _command(binary):

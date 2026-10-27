@@ -109,14 +109,14 @@ def status(cfg, n):
 
 def menu_generate(cfg, n, info):
     from mapf_nco.experts import generate_datasets
-    from mapf_nco.solver_eecbs import find_eecbs
+    from mapf_nco.solver_eecbs import explain_missing, find_eecbs
 
     cfg = dict(cfg)
     cfg["num_train"] = ask("Number of training scenarios (20% go to validation)",
                            cfg["num_train"], int)
     cfg["num_test"] = ask("Number of test scenarios", cfg["num_test"], int)
     if cfg.get("expert", "eecbs") == "eecbs" and find_eecbs(cfg.get("eecbs_bin")) is None:
-        print("  EECBS was not found (see README: 'EECBS on Windows').")
+        print("  " + explain_missing(cfg.get("eecbs_bin")).replace("\n", "\n  "))
         if not ask_yes("  Use the slow Python CBS instead (only OK for ~20 agents or fewer)?", False):
             return
         cfg["expert"] = "cbs"

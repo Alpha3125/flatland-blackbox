@@ -49,6 +49,19 @@ bash scripts/build_eecbs.sh
 This builds `third_party/EECBS/build/eecbs`, which is found automatically. You can also pass
 `--eecbs_bin /path/to/eecbs` or set `MAPF_NCO_EECBS`.
 
+#### EECBS on a Linux server without sudo
+
+Install the build tools into your conda environment, then build:
+
+```bash
+conda activate flatland-blackbox          # or whichever env you use
+conda install -c conda-forge boost cmake  # plus gxx_linux-64 if the server has no g++
+bash scripts/build_eecbs.sh               # picks up Boost from the active conda env
+```
+
+The script checks for git, cmake, a C++ compiler and Boost before building, and says exactly what's missing.
+If `python main.py` still can't find EECBS, it lists every place it looked and why each one failed.
+
 #### EECBS on Windows (via WSL)
 
 Build EECBS inside WSL. Keep running Python normally on Windows: the Linux binary is detected and called

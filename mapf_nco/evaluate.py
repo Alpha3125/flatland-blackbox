@@ -23,6 +23,7 @@ import csv
 import os
 
 import numpy as np
+from tqdm import tqdm
 
 from mapf_nco.compare import LABELS, REF, load_models, plan_all_timed
 from mapf_nco.grid import Grid
@@ -55,7 +56,8 @@ def run_test(cfg, n, num_instances=None, kinds=("edge", "gnn"), plots=True, anim
     methods = [REF] + [LABELS[m] for m in models] + ["Expert"]
     per_instance, times = [], {m: [] for m in methods}
     fails = {m: 0 for m in methods}
-    for i, sc in enumerate(test):
+    say = tqdm.write if log is print else log  # print without breaking the progress bar
+    for i, sc in enumerate(tqdm(test, desc=f"test n={n}", unit="inst")):
         plans, t = plan_all_timed(planner, sc, models)
         lb = sc.lower_bound(grid)
         row = {"instance": i, "lower_bound": lb}
@@ -68,13 +70,14 @@ def run_test(cfg, n, num_instances=None, kinds=("edge", "gnn"), plots=True, anim
             if m in t:
                 times[m].append(t[m])
         per_instance.append(row)
-        log(f"  instance {i:3d}: " + "  ".join(
+        say(f"  instance {i:3d}: " + "  ".join(
             f"{m} {'-' if row[m] is None else row[m]}" for m in methods))
 
         if plots:
             idir = os.path.join(out, f"instance_{i:03d}")
             ok = {m: p for m, p in plans.items() if p is not None}
-            titles = {m: f"{ename if m == 'Expert' else m}: delay {sum_of_costs(p) - lb}"
+            titles = {m: f"{ename if m == 'Expert' else m}: $\\sum_e y_e$ = {sum_of_costs(p)},  "
+                         f"delay {sum_of_costs(p) - lb}"
                       for m, p in ok.items()}
             comp = plot_comparison(grid, sc, ok, titles, os.path.join(idir, "comparison.png"), REF)
             for m, p in ok.items():

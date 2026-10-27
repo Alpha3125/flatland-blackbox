@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import os
 import time
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+
+from tqdm import tqdm
 
 from mapf_nco.grid import Grid
 from mapf_nco.metrics import validate_solution
@@ -103,20 +105,30 @@ def generate_datasets(cfg, agent_counts, workers=None, log=print):
             results, next_seed, attempts = [], seed0, 0
             t0 = time.time()
             with ProcessPoolExecutor(workers, initializer=_init_worker,
-                                     initargs=(cfg["map_path"],)) as pool:
-                while len(results) < size:
-                    need = size - len(results)
-                    batch = [(next_seed + k, n, expert, opts) for k in range(need)]
-                    next_seed += need
-                    attempts += need
-                    for r in pool.map(_solve_task, batch):
-                        if r is not None and len(results) < size:
+                                     initargs=(cfg["map_path"],)) as pool, \
+                    tqdm(total=size, desc=f"n={n} {split}", unit="scen") as bar:
+                pending = set()
+                for _ in range(size):  # one task per wanted scenario
+                    pending.add(pool.submit(_solve_task, (next_seed, n, expert, opts)))
+                    next_seed += 1
+                attempts = size
+                while pending:
+                    done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                    for fut in done:
+                        r = fut.result()
+                        if r is not None:
                             results.append(r)
-                    log(f"  solved {len(results)}/{size} (attempts {attempts}, "
-                        f"{time.time() - t0:.0f}s)")
-                    if attempts > 20 * size:
-                        raise RuntimeError("Expert fails on too many scenarios; "
-                                           "raise the time limit or suboptimality.")
+                            bar.update(1)
+                        else:  # expert failed (time limit): replace with a new scenario
+                            if attempts >= 20 * size:
+                                raise RuntimeError("Expert fails on too many scenarios; "
+                                                   "raise the time limit or suboptimality.")
+                            pending.add(pool.submit(_solve_task, (next_seed, n, expert, opts)))
+                            next_seed += 1
+                            attempts += 1
+                        bar.set_postfix(attempts=attempts, failed=attempts - size)
+            results.sort(key=lambda d: d["meta"]["seed"])  # deterministic order
+            log(f"  solved {len(results)}/{size} (attempts {attempts}, {time.time() - t0:.0f}s)")
             scenarios = [Scenario.from_dict(d) for d in results]
             save_dataset(out, grid, scenarios, info={
                 "num_agents": n, "split": split, "expert": expert,

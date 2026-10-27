@@ -3,7 +3,7 @@ name = "mapf-nco"
 version = "0.1.0"
 description = "Replication of 'Learned Representations Enhance Multi Agent Path Planning' (Captari & van Hoof, 2025)"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24", "scipy>=1.10", "torch>=2.0", "matplotlib>=3.7"]
+dependencies = ["numpy>=1.24", "scipy>=1.10", "torch>=2.0", "matplotlib>=3.7", "tqdm>=4.60", "tensorboard>=2.12"]
 
 [tool.setuptools]
 packages = ["mapf_nco", "mapf_nco.solvers"]

@@ -125,7 +125,8 @@ def compare(cfg, n, split="test", index=None, seed=None, kinds=("edge", "gnn"),
     plans = plan_all(planner, sc, models)
     titles = {}
     log(f"\nScenario {tag}: {n} agents, lower bound {lb}")
-    log(f"{'method':10s} {'SOC':>6s} {'delay':>6s} {'makespan':>8s}  changed agents vs PP (orig)")
+    log("Σe ye = total edge usage (Eq. 1) = sum of arrival times; delay = Σe ye - lower bound")
+    log(f"{'method':10s} {'Σe ye':>6s} {'delay':>6s} {'makespan':>8s}  changed agents vs PP (orig)")
     ref = plans[REF]
     for name, paths in plans.items():
         if paths is None:
@@ -133,7 +134,7 @@ def compare(cfg, n, split="test", index=None, seed=None, kinds=("edge", "gnn"),
             continue
         soc = sum_of_costs(paths)
         changed = [i for i, (a, b) in enumerate(zip(ref, paths)) if list(a) != list(b)]
-        titles[name] = f"{name}: delay {soc - lb}  (SOC {soc})"
+        titles[name] = f"{name}: $\\sum_e y_e$ = {soc},  delay {soc - lb}"
         log(f"{name:10s} {soc:6d} {soc - lb:6d} {max(len(p) - 1 for p in paths):8d}  "
             f"{len(changed)} {changed[:15]}{' ...' if len(changed) > 15 else ''}")
     for name, paths in plans.items():  # per-agent arrival differences

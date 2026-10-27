@@ -25,6 +25,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from mapf_nco.blackbox import blackbox_step, usage_loss
 from mapf_nco.grid import Grid
@@ -201,7 +202,9 @@ def train(cfg, n, kind, workers=1, log=print):
             idx = list(range(len(train_set)))
             rng.shuffle(idx)
             losses, n_fail, n_zero = [], 0, 0
-            for k in range(0, len(idx), B):
+            bar = tqdm(range(0, len(idx), B), desc=f"epoch {epoch}/{cfg['epochs']}",
+                       unit="batch", leave=False)
+            for k in bar:
                 bidx = idx[k:k + B]
                 batch_sc = [train_set[i] for i in bidx]
                 opt.zero_grad()
@@ -219,8 +222,10 @@ def train(cfg, n, kind, workers=1, log=print):
                 opt.step()
                 step += 1
                 if b_losses:
+                    bar.set_postfix(loss=f"{np.mean(losses):.5f}")
                     batch_losses.append((epoch - 1 + (k + len(bidx)) / len(idx), float(np.mean(b_losses))))
                     tb.scalar("train/batch_loss", batch_losses[-1][1], step)
+            bar.close()
             val, vfails = validate()
             improved = val < best
             if improved:

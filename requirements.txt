@@ -3,4 +3,5 @@ scipy>=1.10
 torch>=2.0
 matplotlib>=3.7
 pytest>=7.0
+tqdm>=4.60
 tensorboard>=2.12

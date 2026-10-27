@@ -159,7 +159,7 @@ def plot_training_curves(history, batch_losses, refs, best_epoch, kind, n, reduc
     a2.scatter([best_epoch], [val[epochs.index(best_epoch)]], s=160, marker="*", color="gold",
                edgecolors="black", zorder=5, label=f"selected (epoch {best_epoch})")
     a2.set_xlabel("epoch")
-    a2.set_ylabel("validation delay (SOC - lower bound)")
+    a2.set_ylabel(r"validation delay  ($\sum_e y_e$ $-$ lower bound)")
     a2.set_title("Validation delay (lower is better)", fontsize=11)
     a2.grid(alpha=0.3)
     a2.legend(fontsize=8)
@@ -191,7 +191,7 @@ def plot_test_summary(per_instance, methods, out_path, title, expert_name="EECBS
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=8)
     ax.set_xlabel("test instance")
-    ax.set_ylabel("delay (SOC - lower bound)")
+    ax.set_ylabel(r"delay  ($\sum_e y_e$ $-$ lower bound)")
     ax.set_title(title)
     ax.legend(fontsize=8)
     ax.grid(axis="y", alpha=0.3)

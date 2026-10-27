@@ -230,8 +230,27 @@ mapf_nco/
   paths.py / tb.py       output folder layout, TensorBoard logging
   train.py / evaluate.py / experts.py / metrics.py
 scripts/build_eecbs.sh  builds EECBS into third_party/
-tests/                  pytest suite
+tests/                  pytest suite (test_correctness.py: checks against reference implementations)
 ```
+
+## Correctness checks
+
+`python -m pytest` runs the whole suite. `tests/test_correctness.py` checks each algorithm against a separately written,
+deliberately simple reference:
+
+| Check | Reference |
+|---|---|
+| Grid graph | 4-neighbour pairs read straight from the `.map` text |
+| PP: each agent's path is the cheapest one its higher-priority agents allow | plain Dijkstra over explicit (cell, time) states, no heuristic, constraints re-implemented |
+| PP: a single agent's cost equals the weighted shortest path | SciPy Dijkstra |
+| PP: lower-priority agents never change higher-priority paths | re-planning a prefix of the priority order |
+| CBS returns the optimal sum-of-costs | brute-force joint-state search over all agents |
+| Σ y_e = SOC and delay ≥ 0 | definition |
+| Black-box gradient | Eqs. 4–6 recomputed by hand |
+
+Each check was also confirmed to catch deliberately introduced bugs: PP ignoring swap conflicts, PP parking on a
+goal that a higher-priority agent visits later, waits not using the learned self-loop cost, CBS ignoring swaps, a
+flipped gradient sign, and a wrong loss scaling.
 
 ## Citation
 

@@ -268,6 +268,11 @@ def parse_args(argv=None):
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):  # so "Σ" prints on any Windows console
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     args = parse_args(argv)
     if args.command is None:
         return interactive(args.menu_config)

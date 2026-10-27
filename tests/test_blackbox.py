@@ -2,7 +2,7 @@ import numpy as np
 
 from mapf_nco.blackbox import blackbox_step, usage_loss
 from mapf_nco.metrics import edge_usage
-from mapf_nco.solvers.pp import PrioritizedPlanner
+from mapf_nco.solver_pp import PrioritizedPlanner
 
 
 def _setup(g):

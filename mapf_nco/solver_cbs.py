@@ -3,7 +3,7 @@
 The paper uses EECBS (C++) to produce expert plans. This optimal CBS exists so
 the pipeline can be exercised end-to-end without compiling EECBS. It is fine for
 small agent counts but will usually hit its time limit at 50-100 agents on
-random-32-32-20; use :mod:`mapf_nco.solvers.eecbs` for the paper's experiments.
+random-32-32-20; use :mod:`mapf_nco.solver_eecbs` for the paper's experiments.
 """
 
 from __future__ import annotations

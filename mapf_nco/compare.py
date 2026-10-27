@@ -19,7 +19,7 @@ from mapf_nco.metrics import sum_of_costs, validate_solution
 from mapf_nco.scenarios import (
     assign_priority_order, dataset_path, load_dataset, make_rng, random_scenario,
 )
-from mapf_nco.solvers.pp import NoSolutionError, PrioritizedPlanner
+from mapf_nco.solver_pp import NoSolutionError, PrioritizedPlanner
 
 REF = "PP (orig)"
 LABELS = {"edge": "PP (Edge)", "gnn": "PP (GNN)"}
@@ -85,7 +85,7 @@ def _fresh_scenario(cfg, grid, n, seed, log):
     expert = cfg.get("expert", "eecbs")
     tl = float(cfg.get("expert_time_limit", 60))
     if expert == "eecbs":
-        from mapf_nco.solvers.eecbs import find_eecbs, solve_eecbs
+        from mapf_nco.solver_eecbs import find_eecbs, solve_eecbs
 
         binary = find_eecbs(cfg.get("eecbs_bin"))
         paths = None if binary is None else solve_eecbs(
@@ -93,7 +93,7 @@ def _fresh_scenario(cfg, grid, n, seed, log):
         if binary is None:
             log("EECBS not found: comparing without an expert plan")
     else:
-        from mapf_nco.solvers.cbs import solve_cbs
+        from mapf_nco.solver_cbs import solve_cbs
 
         log(f"solving with Python CBS (limit {tl:.0f}s)...")
         paths = solve_cbs(grid, sc.starts, sc.goals, time_limit=tl)

@@ -23,8 +23,8 @@ from mapf_nco.scenarios import (
     random_scenario,
     save_dataset,
 )
-from mapf_nco.solvers.cbs import solve_cbs
-from mapf_nco.solvers.eecbs import check_eecbs, find_eecbs, solve_eecbs, uses_wsl
+from mapf_nco.solver_cbs import solve_cbs
+from mapf_nco.solver_eecbs import check_eecbs, find_eecbs, solve_eecbs, uses_wsl
 
 _G = None
 

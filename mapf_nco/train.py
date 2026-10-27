@@ -33,7 +33,7 @@ from mapf_nco.models import build_model, make_batch
 from mapf_nco.scenarios import dataset_path, load_dataset, train_val_split
 from mapf_nco.metrics import edge_usage
 from mapf_nco.paths import checkpoint_path, fresh_dir, tensorboard_dir, training_dir
-from mapf_nco.solvers.pp import NoSolutionError, PrioritizedPlanner
+from mapf_nco.solver_pp import NoSolutionError, PrioritizedPlanner
 from mapf_nco.tb import TB
 from mapf_nco.viz import plot_training_curves
 

@@ -30,7 +30,7 @@ from mapf_nco.grid import Grid
 from mapf_nco.metrics import optimality_gap, sum_of_costs
 from mapf_nco.paths import fresh_dir, tensorboard_dir, test_dir
 from mapf_nco.scenarios import dataset_path, load_dataset
-from mapf_nco.solvers.pp import PrioritizedPlanner
+from mapf_nco.solver_pp import PrioritizedPlanner
 
 METHODS = ("orig", "edge", "gnn")
 KEY = {REF: "orig", "PP (Edge)": "edge", "PP (GNN)": "gnn"}

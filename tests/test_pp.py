@@ -3,7 +3,7 @@ import pytest
 
 from mapf_nco.metrics import delay, edge_usage, lower_bound, sum_of_costs, validate_solution
 from mapf_nco.scenarios import assign_priority_order, make_rng, random_scenario
-from mapf_nco.solvers.pp import NoSolutionError, PrioritizedPlanner, distance_order, solve_pp
+from mapf_nco.solver_pp import NoSolutionError, PrioritizedPlanner, distance_order, solve_pp
 
 
 def test_single_agent_is_shortest_path(grid):

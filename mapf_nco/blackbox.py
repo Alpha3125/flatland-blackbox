@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from mapf_nco.metrics import edge_usage, sum_of_costs
-from mapf_nco.solvers.pp import NoSolutionError, PrioritizedPlanner
+from mapf_nco.solver_pp import NoSolutionError, PrioritizedPlanner
 
 
 @dataclass

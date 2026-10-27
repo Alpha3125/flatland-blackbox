@@ -4,7 +4,6 @@ Planning" (Captari & van Hoof, ICML 2025 PRAL workshop).
 Run without arguments for the interactive menu:
 
     python main.py                              (uses configs/paper.json)
-    python main.py --config configs/smoke.json  (quick test settings)
 
 Or use the commands directly:
 
@@ -110,7 +109,7 @@ def status(cfg, n):
 
 def menu_generate(cfg, n, info):
     from mapf_nco.experts import generate_datasets
-    from mapf_nco.solvers.eecbs import find_eecbs
+    from mapf_nco.solver_eecbs import find_eecbs
 
     cfg = dict(cfg)
     cfg["num_train"] = ask("Number of training scenarios (20% go to validation)",

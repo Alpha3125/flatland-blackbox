@@ -10,9 +10,9 @@ from mapf_nco.scenarios import (
     Scenario, assign_priority_order, load_dataset, make_rng, random_scenario, read_scen,
     save_dataset, write_scen,
 )
-from mapf_nco.solvers.cbs import solve_cbs
-from mapf_nco.solvers.eecbs import parse_eecbs_paths, solve_eecbs
-from mapf_nco.solvers.pp import solve_pp
+from mapf_nco.solver_cbs import solve_cbs
+from mapf_nco.solver_eecbs import parse_eecbs_paths, solve_eecbs
+from mapf_nco.solver_pp import solve_pp
 
 
 def test_cbs_is_optimal_and_feasible(grid):
@@ -63,7 +63,7 @@ import sys
 sys.path.insert(0, {root!r})
 from mapf_nco.grid import Grid
 from mapf_nco.scenarios import read_scen
-from mapf_nco.solvers.pp import solve_pp
+from mapf_nco.solver_pp import solve_pp
 a = sys.argv[1:]
 opt = {{a[i]: a[i + 1] for i in range(0, len(a) - 1, 2)}}
 g = Grid.from_file(opt["-m"])
@@ -111,7 +111,7 @@ def test_compare_writes_pictures(grid, tmp_path):
 
 
 def test_wsl_path_translation(monkeypatch):
-    import mapf_nco.solvers.eecbs as e
+    import mapf_nco.solver_eecbs as e
 
     monkeypatch.setattr(e, "IS_WINDOWS", True)
     monkeypatch.setattr(e.os.path, "abspath", lambda p: p)

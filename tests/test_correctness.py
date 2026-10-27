@@ -16,8 +16,8 @@ from mapf_nco.blackbox import blackbox_step
 from mapf_nco.grid import Grid
 from mapf_nco.metrics import edge_usage, find_conflicts, lower_bound, sum_of_costs
 from mapf_nco.scenarios import assign_priority_order, make_rng, random_scenario
-from mapf_nco.solvers.cbs import solve_cbs
-from mapf_nco.solvers.pp import PrioritizedPlanner, distance_order
+from mapf_nco.solver_cbs import solve_cbs
+from mapf_nco.solver_pp import PrioritizedPlanner, distance_order
 
 SMALL_MAP = [
     "......@.",

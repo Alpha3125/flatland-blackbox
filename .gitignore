@@ -13,8 +13,8 @@ dist/
 .idea/
 
 # Generated data and results (regenerate with main.py)
-data/scenarios/
-data/smoke/
+data/*
+!data/*.map
 outputs/*
 !outputs/.gitkeep
 

@@ -18,11 +18,11 @@ city generators, flowtime) has been replaced by the grid MAPF setting the paper 
 |---|---|
 | §3.1 grid graph, wait self-loops, directed edges | `mapf_nco/grid.py` |
 | §3.1 edge-usage vector *y* (Eq. 1) | `mapf_nco/metrics.py` → `edge_usage` |
-| §3.1/3.3 PP: space-time A\*, reservation table, learned costs for *g*, unit costs for timing, true-distance heuristic recomputed under the learned weights | `mapf_nco/solvers/pp.py` |
+| §3.1/3.3 PP: space-time A\*, reservation table, learned costs for *g*, unit costs for timing, true-distance heuristic recomputed under the learned weights | `mapf_nco/solver_pp.py` |
 | §3.2 MSE loss on directed usage (Eq. 4), perturbation (Eq. 5), surrogate gradient (Eq. 6) | `mapf_nco/blackbox.py` |
 | §3.3 / §4 Edge model and two-layer GraphSAGE model with an edge MLP | `mapf_nco/models.py` |
 | Algorithm 1, Adam (lr 5e-4), λ = 1.0, validation-delay checkpointing | `mapf_nco/train.py` |
-| §4 EECBS experts (suboptimality 1.0 for 50 agents, 1.05 for 75/100) | `mapf_nco/solvers/eecbs.py`, `mapf_nco/experts.py` |
+| §4 EECBS experts (suboptimality 1.0 for 50 agents, 1.05 for 75/100) | `mapf_nco/solver_eecbs.py`, `mapf_nco/experts.py` |
 | §4 priority order: ascending true distance, otherwise one fixed random permutation | `mapf_nco/scenarios.py` → `assign_priority_order` |
 | §4 random-32-32-20 map, 500 train scenarios (20 % for validation), 25 test scenarios | `configs/paper.json` |
 | Table 1: average delay and optimality gap relative to EECBS | `mapf_nco/evaluate.py` |
@@ -86,8 +86,7 @@ If you don't have EECBS, `--expert cbs` uses a pure-Python optimal CBS. It is on
 ## Using it: the interactive menu
 
 ```powershell
-python main.py                                # paper settings (EECBS experts)
-python main.py --config configs/smoke.json    # quick test: 12 agents, Python CBS, 3 epochs
+python main.py          # settings from configs/paper.json
 ```
 
 ```
@@ -108,9 +107,8 @@ Number of agents [50]: 50
    stored with each instance, and writes comparison maps plus a summary chart and table. If no model is trained
    yet, it compares PP with EECBS only.
 
-**The smoke config** checks that everything runs in a couple of minutes, without EECBS. It uses 12 agents, Python
-CBS as the expert, 32 training scenarios (+8 for validation), 3 epochs and 6 test scenarios. At 12 agents PP is
-already almost optimal, so don't expect learned PP to improve on it there. The paper's effect needs 50–100 agents.
+For a quick trial, answer the generate prompts with small numbers (e.g. 40 training and 5 test scenarios) and
+train for a few epochs.
 
 ## Commands (same steps, for scripts)
 
@@ -217,13 +215,13 @@ the paper's.
 
 ```
 main.py                 interactive menu, or commands: generate | train | test | solve | evaluate | all
-configs/                paper.json (full replication), smoke.json (quick check)
+configs/paper.json      all settings (paper defaults)
 mapf_nco/
   grid.py               MovingAI map -> grid graph with directed edges and self-loops
   scenarios.py          scenario sampling, priority orders, dataset and .scen I/O
-  solvers/pp.py         Prioritized Planning with learned edge costs
-  solvers/eecbs.py      wrapper around the EECBS binary
-  solvers/cbs.py        Python CBS fallback expert
+  solver_pp.py          Prioritized Planning with learned edge costs
+  solver_eecbs.py       wrapper around the EECBS binary
+  solver_cbs.py         Python CBS fallback expert
   blackbox.py           black-box gradient through PP
   models.py             Edge and GraphSAGE models
   compare.py / viz.py    comparisons, pictures, animations, training curves

@@ -44,7 +44,7 @@ def test_gnn_starts_at_unit_costs_and_backprops(grid):
 def test_train_and_evaluate_smoke(grid, tmp_path):
     from mapf_nco.evaluate import evaluate, format_table
     from mapf_nco.scenarios import dataset_path, save_dataset
-    from mapf_nco.solvers.cbs import solve_cbs
+    from mapf_nco.solver_cbs import solve_cbs
     from mapf_nco.train import train
 
     from conftest import MAP_PATH

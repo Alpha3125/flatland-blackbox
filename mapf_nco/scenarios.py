@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from mapf_nco.metrics import edge_usage, lower_bound, sum_of_costs
-from mapf_nco.solvers.pp import NoSolutionError, PrioritizedPlanner, distance_order
+from mapf_nco.solver_pp import NoSolutionError, PrioritizedPlanner, distance_order
 
 
 @dataclass

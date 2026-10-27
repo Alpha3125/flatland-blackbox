@@ -1,43 +1,22 @@
-# Byte-compiled / optimized / compiled Python files
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
-.pytest_cache
+.pytest_cache/
+*.egg-info/
+build/
+dist/
 
-# macOS system files
+# OS / editor
 .DS_Store
 ._*
+.vscode/
+.idea/
 
-# Python environment package files
-*.egg
-*.egg-info/
-dist/
-build/
-*.whl
+# Generated data and results (regenerate with main.py)
+data/scenarios/
+data/smoke/
+outputs/*
+!outputs/.gitkeep
 
-# Jupyter Notebook output
-*.nbconvert.ipynb
-
-# Notebook metadata
-*.metadata.json
-
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints/
-
-# Logs and temporary files
-*.log
-*.tmp
-
-mapf_benchmarks/
-
-results/
-
-2.1_Beta_release.pdf  
-README.md          
-main.py  
-pyproject.toml    
-run_configs.json
-LICENSE               
-flatland_blackbox    
-requirements.txt  
-tests
+# External solver checkout/build
+third_party/

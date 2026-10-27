@@ -1,0 +1,26 @@
+{
+  "map_path": "data/random-32-32-20.map",
+  "data_dir": "data/scenarios",
+  "output_dir": "outputs",
+  "agent_counts": [50, 75, 100],
+
+  "num_train": 500,
+  "num_test": 25,
+  "val_fraction": 0.2,
+  "expert": "eecbs",
+  "eecbs_bin": null,
+  "expert_time_limit": 120,
+  "suboptimality": {"50": 1.0, "75": 1.05, "100": 1.05},
+
+  "models": ["edge", "gnn"],
+  "epochs": 30,
+  "batch_size": 8,
+  "lr": 0.0005,
+  "lam": 1.0,
+  "loss_reduction": "mean",
+  "w_min": 0.001,
+  "gnn": {"hidden": 64, "num_freqs": 6, "id_dim": 8, "mlp_hidden": 64},
+
+  "seed": 0,
+  "device": "cpu"
+}

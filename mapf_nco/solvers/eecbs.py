@@ -151,8 +151,12 @@ def solve_eecbs(
         cmd += list(extra_args or [])
         err = ""
         try:
+            # stdin=DEVNULL: EECBS never reads input, and on Windows wsl.exe would
+            # otherwise grab the shared console and leave it in raw mode, which
+            # breaks typing into the interactive menu afterwards.
             proc = subprocess.run(
                 cmd,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=time_limit + 60,

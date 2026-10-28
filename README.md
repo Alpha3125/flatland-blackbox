@@ -107,6 +107,7 @@ python main.py          # settings from configs/paper.json
   2) Experiment: train the Edge and GNN models (choose hyperparameters)
   3) Test: saved test scenarios, or new random scenarios (comparison plots)
   4) Change number of agents
+  5) Sweep: generate + queue of experiments + tests on 2 agent counts
   0) Quit
 ```
 
@@ -127,6 +128,33 @@ python main.py          # settings from configs/paper.json
    - **Top row:** the plans of PP (orig), PP (Edge), PP (GNN), EECBS and CBS.
    - **Bottom row:** the edge costs each model gives that scenario, as a blue (cheaper) to red (dearer)
      gradient.
+
+### Option 5: Sweep (everything in one go)
+
+A sweep generates the data if needed, then runs a queue of experiments. For each hyperparameter you can give
+several values separated by commas, e.g. learning rate `1e-4, 5e-4` and lambda `0.5, 1, 2`, and it runs every
+combination (6 experiments here). Each experiment:
+- trains the Edge and GNN models from scratch;
+- tests them on the saved test scenarios;
+- tests them on a **second test set with a different agent count**: half the agents when training used 50 or
+  more, otherwise the largest agent count in the config. This set is generated once and shared, so experiments
+  are compared fairly.
+
+Results go to `outputs/sweeps/<map>_n<N>_<date>/`:
+- **`sweep_summary.md` / `.csv`:** one row per experiment with its settings, best epochs, validation delay and both
+  tests' delays. It's updated after every experiment, so a long sweep can be checked while it runs.
+- **`sweep_summary.png`:** a bar chart of every experiment on both test sets, against original PP and EECBS.
+- **`exp_01/`, `exp_02/`, …:** each experiment's models, loss graphs, TensorBoard logs and comparison plots
+  (`test/` and `test_n<M>/`).
+
+The same from the command line:
+
+```bash
+python main.py sweep --agents 50 --grid lr=1e-4,5e-4 lam=0.5,1,2 --num 25
+```
+
+Sweepable: epochs, batch_size, lr, lam, loss_reduction, w_min, val_fraction, seed, gnn_hidden,
+gnn_num_freqs, gnn_id_dim, gnn_mlp_hidden.
 
 ## Commands (same steps, for scripts)
 
@@ -217,7 +245,7 @@ the paper's.
 ## Repository layout
 
 ```
-main.py                 interactive menu, or commands: generate | experiment | test | evaluate
+main.py                 interactive menu, or commands: generate | experiment | test | sweep | evaluate
 configs/paper.json      all settings (paper defaults)
 mapf_nco/
   grid.py               MovingAI map -> grid graph with directed edges and self-loops
@@ -228,6 +256,7 @@ mapf_nco/
   blackbox.py           black-box gradient through PP
   models.py             Edge and GraphSAGE models
   compare.py / viz.py    test helpers, pictures, animations, training curves
+  sweep.py              option 5: queue of experiments, shared second test set, summary
   paths.py / tb.py       output folder layout, TensorBoard logging
   train.py / evaluate.py / experts.py / metrics.py
 scripts/build_eecbs.sh  builds EECBS into third_party/

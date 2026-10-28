@@ -15,6 +15,7 @@ Or use the commands directly:
     python main.py experiment --agents 50 --epochs 30 --lr 5e-4 --lam 1.0
     python main.py test       --agents 50 --num 10                       saved test scenarios
     python main.py test       --agents 50 --random 5 --test_agents 75     new random scenarios
+    python main.py sweep      --agents 50 --grid lr=1e-4,5e-4 lam=0.5,1   4 experiments
     python main.py evaluate   --agents 50 75 100                          Table 1, no plots
 
 ``--set key=value`` overrides any entry of the config file.
@@ -230,6 +231,76 @@ def menu_test(cfg, n, info):
     open_file(os.path.join(test_dir(cfg, info["grid"].name, n), "summary.png"))
 
 
+def _ask_values(prompt, default, cast):
+    """Comma-separated values, e.g. '1e-4, 5e-4'."""
+    while True:
+        raw = input(f"{prompt} [{default}]: ").strip()
+        if not raw:
+            return [default]
+        try:
+            vals = [cast(v.strip()) for v in raw.split(",") if v.strip()]
+            if vals:
+                return vals
+        except ValueError:
+            pass
+        print("  enter one value, or several separated by commas")
+
+
+def menu_sweep(cfg, n, info):
+    from mapf_nco.experts import generate_datasets
+    from mapf_nco.sweep import expand_grid, run_sweep, second_agent_count
+
+    cfg = dict(cfg)
+    print("  Sweep = generate (if needed) + a queue of experiments, each trained and tested on the")
+    print("  same scenarios. Give several values separated by commas to try them all.")
+    if not _expert_available(cfg):
+        return
+    if not (info["train"] and info["test"]):
+        print("  No data for this agent count yet: generating it first.")
+        cfg["num_train"] = ask("  Number of training scenarios", cfg["num_train"], int)
+        cfg["num_test"] = ask("  Number of test scenarios", cfg["num_test"], int)
+        need_data = True
+    else:
+        need_data = info["train_missing"] or info["test_missing"]
+        if need_data:
+            print("  (existing data will get its missing PP/CBS plans added)")
+            cfg["augment"] = True
+    g = cfg.get("gnn", {})
+    grid_values = {
+        "epochs": _ask_values("  epochs", cfg["epochs"], int),
+        "batch_size": _ask_values("  batch size", cfg["batch_size"], int),
+        "lr": _ask_values("  learning rate", cfg["lr"], float),
+        "lam": _ask_values("  lambda", cfg["lam"], float),
+        "loss_reduction": _ask_values("  loss (mean/sum)", cfg["loss_reduction"], str),
+        "w_min": _ask_values("  w_min", cfg["w_min"], float),
+        "val_fraction": _ask_values("  validation fraction", cfg["val_fraction"], float),
+        "seed": _ask_values("  seed", cfg["seed"], int),
+        "gnn_hidden": _ask_values("  GNN hidden size", g.get("hidden", 64), int),
+        "gnn_num_freqs": _ask_values("  GNN positional frequencies", g.get("num_freqs", 6), int),
+        "gnn_id_dim": _ask_values("  GNN agent-ID size", g.get("id_dim", 8), int),
+        "gnn_mlp_hidden": _ask_values("  GNN edge-MLP size", g.get("mlp_hidden", 64), int),
+    }
+    if any(v not in ("mean", "sum") for v in grid_values["loss_reduction"]):
+        print("  loss must be 'mean' or 'sum'")
+        return
+    k = len(expand_grid(grid_values))
+    test_count = ask("  Saved test instances per experiment", info["test"] or cfg["num_test"], int)
+    second_n = ask("  Agents in the second test set (half if >= 50, else the max)",
+                   second_agent_count(n, cfg), int)
+    second_count = ask("  Scenarios in the second test set", test_count, int)
+    animate = ask_yes("  Save animations too (slower)?", False)
+    workers = ask("  Parallel workers", default_workers(), int)
+    print(f"\n  {k} experiment(s) x (train Edge + train GNN + 2 tests). "
+          f"Each training takes about epochs x (a few seconds to a minute).")
+    if not ask_yes("  Start?", True):
+        return
+    if need_data:
+        generate_datasets(cfg, [n], workers=workers)
+    root, _ = run_sweep(cfg, n, grid_values, test_count, second_n, second_count,
+                        animate=animate, workers=workers)
+    open_file(os.path.join(root, "sweep_summary.png"))
+
+
 def interactive(config_path):
     cfg = load_config(config_path)
     print("=" * 64)
@@ -244,8 +315,9 @@ def interactive(config_path):
   2) Experiment: train the Edge and GNN models (choose hyperparameters)
   3) Test: saved test scenarios, or new random scenarios (comparison plots)
   4) Change number of agents
+  5) Sweep: generate + queue of experiments + tests on 2 agent counts
   0) Quit""")
-        c = ask("Choose", None, int, [0, 1, 2, 3, 4])
+        c = ask("Choose", None, int, [0, 1, 2, 3, 4, 5])
         try:
             if c == 0:
                 return
@@ -257,6 +329,8 @@ def interactive(config_path):
                 menu_test(cfg, n, info)
             elif c == 4:
                 n = ask("Number of agents", n, int)
+            elif c == 5:
+                menu_sweep(cfg, n, info)
         except KeyboardInterrupt:
             print("\n  (interrupted, back to menu)")
         except Exception as e:  # keep the menu alive, show what went wrong
@@ -318,6 +392,17 @@ def parse_args(argv=None):
     t.add_argument("--expert", choices=["eecbs", "cbs"])
     t.add_argument("--eecbs_bin")
 
+    w = sub.add_parser("sweep", help="queue of experiments, each tested on 2 agent counts")
+    common(w)
+    w.add_argument("--grid", nargs="+", metavar="KEY=V1,V2", default=[],
+                   help="values to try, e.g. lr=1e-4,5e-4 lam=0.5,1 gnn_hidden=32,64")
+    w.add_argument("--num", type=int, help="saved test instances per experiment")
+    w.add_argument("--second_agents", type=int, help="agents in the second test set")
+    w.add_argument("--second_num", type=int, help="scenarios in the second test set")
+    w.add_argument("--animate", action="store_true")
+    w.add_argument("--expert", choices=["eecbs", "cbs"])
+    w.add_argument("--eecbs_bin")
+
     e = sub.add_parser("evaluate", help="Table 1 over all saved test scenarios, no plots")
     common(e)
     e.add_argument("--model", nargs="+", choices=["edge", "gnn"])
@@ -368,6 +453,22 @@ def main(argv=None):
                             animate=args.animate, workers=workers)
             else:
                 test_saved(cfg, n, args.num, models, animate=args.animate)
+
+    if args.command == "sweep":
+        from mapf_nco.experts import generate_datasets
+        from mapf_nco.sweep import SWEEPABLE, run_sweep
+
+        grid_values = {}
+        for item in args.grid:
+            key, _, vals = item.partition("=")
+            if key not in SWEEPABLE:
+                raise SystemExit(f"cannot sweep '{key}'; choose from {', '.join(SWEEPABLE)}")
+            grid_values[key] = [json.loads(v) if v not in ("mean", "sum") else v
+                                for v in vals.split(",")]
+        for n in agents:
+            generate_datasets(dict(cfg, augment=True), [n], workers=workers)
+            run_sweep(cfg, n, grid_values or {"lr": [cfg["lr"]]}, args.num, args.second_agents,
+                      args.second_num, animate=args.animate, workers=workers)
 
     if args.command == "evaluate":
         from mapf_nco.evaluate import evaluate, format_table, save_results

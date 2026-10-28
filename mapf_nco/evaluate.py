@@ -74,15 +74,15 @@ def test_random(cfg, trained_n, num_agents, count, seed=12345, kinds=("edge", "g
 
 
 def run_test(cfg, grid, trained_n, scenarios, ename, label, kinds=("edge", "gnn"),
-             plots=True, animate=False, log=print):
+             plots=True, animate=False, log=print, out_name="test"):
     from mapf_nco.tb import TB
     from mapf_nco.viz import animate_comparison, plot_comparison, plot_paths, plot_test_summary
 
     planner = PrioritizedPlanner(grid, w_min=cfg["w_min"])
     models = load_models(cfg, grid, trained_n, kinds, log)
     header = hparams_header(models, trained_n)
-    out = fresh_dir(test_dir(cfg, grid.name, trained_n))
-    tb = TB(tensorboard_dir(cfg, grid.name, trained_n, "test"), log) if plots else None
+    out = fresh_dir(test_dir(cfg, grid.name, trained_n, out_name))
+    tb = TB(tensorboard_dir(cfg, grid.name, trained_n, out_name), log) if plots else None
     has_cbs = any(s.cbs_paths for s in scenarios)
     methods = [REF] + [LABELS[m] for m in models] + ["Expert"] + (["CBS"] if has_cbs else [])
     names = {m: (ename if m == "Expert" else m) for m in methods}

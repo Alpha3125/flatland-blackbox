@@ -31,8 +31,8 @@ def tensorboard_dir(cfg, map_name, n, name):
     return os.path.join(run_dir(cfg, map_name, n), "tensorboard", name)
 
 
-def test_dir(cfg, map_name, n):
-    return os.path.join(run_dir(cfg, map_name, n), "test")
+def test_dir(cfg, map_name, n, name="test"):
+    return os.path.join(run_dir(cfg, map_name, n), name)
 
 
 def plots_dir(cfg, map_name, n):

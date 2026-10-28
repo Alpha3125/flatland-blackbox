@@ -264,3 +264,30 @@ def plot_test_summary(per_instance, methods, out_path, title, expert_name="EECBS
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
     return _save(fig, out_path, dpi=130)
+
+
+def plot_sweep_summary(rows, n, second_n, out_path):
+    """Test delay of every experiment on both test sets, with PP and expert reference lines."""
+    import numpy as np
+
+    names = [r["experiment"][4:] for r in rows]
+    x = np.arange(len(rows))
+    fig, axes = plt.subplots(1, 2, figsize=(max(9, 1.1 * len(rows) + 6), 4.6))
+    for ax, tag, title in ((axes[0], f"n{n}", f"test, {n} agents (training count)"),
+                           (axes[1], f"n{second_n}", f"test, {second_n} agents (new scenarios)")):
+        ax.bar(x - 0.2, [r[f"{tag}_edge_delay"] for r in rows], 0.4, label="PP (Edge)",
+               color=METHOD_COLORS["PP (Edge)"])
+        ax.bar(x + 0.2, [r[f"{tag}_gnn_delay"] for r in rows], 0.4, label="PP (GNN)",
+               color=METHOD_COLORS["PP (GNN)"])
+        ax.axhline(rows[0][f"{tag}_orig_delay"], color="gray", ls="--", label="original PP")
+        ax.axhline(rows[0][f"{tag}_expert_delay"], color="green", ls=":", label="EECBS")
+        ax.set_xticks(x)
+        ax.set_xticklabels(names)
+        ax.set_xlabel("experiment (see sweep_summary.md for its settings)")
+        ax.set_ylabel(r"delay  ($\sum_e y_e$ $-$ lower bound)")
+        ax.set_title(title, fontsize=10)
+        ax.grid(axis="y", alpha=0.3)
+        ax.legend(fontsize=8)
+    fig.suptitle(f"Sweep: models trained on {n} agents (lower is better)", fontsize=11)
+    fig.tight_layout()
+    return _save(fig, out_path, dpi=130)

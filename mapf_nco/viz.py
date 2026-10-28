@@ -60,34 +60,101 @@ def changed_agents(plans, reference):
     return out
 
 
-def plot_comparison(grid, sc, plans, titles, out_path, reference):
-    """Side-by-side panels, one per method.
+def _draw_plans(ax, grid, paths, changed):
+    for i, p in enumerate(paths):
+        xs, ys = _xy(grid, p)
+        if i in changed:
+            c = _agent_color(i)
+            ax.plot(xs, ys, color=c, lw=2.2, zorder=2)
+            ax.scatter(xs[:1], ys[:1], color=c, marker="o", s=30, edgecolors="black", zorder=4)
+            ax.scatter(xs[-1:], ys[-1:], color=c, marker="*", s=90, edgecolors="black", zorder=4)
+            ax.annotate(str(i), (xs[0], ys[0]), fontsize=7, xytext=(3, 3),
+                        textcoords="offset points", zorder=5)
+        else:
+            ax.plot(xs, ys, color=FADED, lw=1.0, zorder=1)
 
-    Agents whose path differs from the reference plan (original PP) are drawn
-    thick and in colour; agents with identical paths are faded grey. In the
-    reference panel, an agent is highlighted if any other method changed it.
+
+def weight_norm(weight_list):
+    """Shared colour scale for edge costs, centred on the original cost 1."""
+    import numpy as np
+    from matplotlib.colors import TwoSlopeNorm
+
+    allw = np.concatenate([np.asarray(w, float) for w in weight_list])
+    return TwoSlopeNorm(vcenter=1.0, vmin=min(float(allw.min()), 0.999),
+                        vmax=max(float(allw.max()), 1.001))
+
+
+def draw_weights(ax, grid, w, norm, cmap="coolwarm"):
+    """Edges as segments coloured by cost (mean of both directions); waits as squares."""
+    import numpy as np
+    from matplotlib.collections import LineCollection
+
+    w = np.asarray(w, dtype=float)
+    segs, vals = [], []
+    for e in grid.move_edges:
+        u, v = int(grid.edge_src[e]), int(grid.edge_dst[e])
+        if u < v:
+            (r1, c1), (r2, c2) = grid.cell(u), grid.cell(v)
+            segs.append([(c1, r1), (c2, r2)])
+            vals.append(0.5 * (w[e] + w[grid.edge_matrix[v, u]]))
+    _draw_map(ax, grid)
+    lc = LineCollection(segs, cmap=cmap, norm=norm, linewidths=3.0, zorder=2)
+    lc.set_array(np.array(vals))
+    ax.add_collection(lc)
+    ax.scatter(grid.coords[:, 1], grid.coords[:, 0], c=w[grid.self_loop], cmap=cmap, norm=norm,
+               marker="s", s=9, linewidths=0, zorder=3)
+    return np.array(vals)
+
+
+def plot_comparison(grid, sc, plans, titles, out_path, reference, weights=None, header=None,
+                    weight_titles=None):
+    """Comparison figure.
+
+    Top row: one map per method. Agents whose path differs from the reference
+    (original PP) are coloured and numbered; unchanged agents are grey.
+    Bottom row (if ``weights``): the edge costs each model gives this scenario,
+    as a blue (cheaper than 1) to red (dearer) gradient, with the starts (o) and
+    goals (*). ``header`` (e.g. the training hyperparameters) is printed on top.
     """
     names = [k for k, v in plans.items() if v is not None]
     changed = changed_agents({k: plans[k] for k in names}, reference)
-    fig, axes = plt.subplots(1, len(names), figsize=(5.2 * len(names), 5.6), squeeze=False)
+    weights = weights or {}
+    rows = 2 if weights else 1
+    cols = max(len(names), len(weights))
+    fig, axes = plt.subplots(rows, cols, figsize=(4.9 * cols, 5.3 * rows + 0.6), squeeze=False)
     for ax, name in zip(axes[0], names):
         _draw_map(ax, grid)
-        for i, p in enumerate(plans[name]):
-            xs, ys = _xy(grid, p)
-            if i in changed[name]:
-                c = _agent_color(i)
-                ax.plot(xs, ys, color=c, lw=2.2, zorder=2)
-                ax.scatter(xs[:1], ys[:1], color=c, marker="o", s=30, edgecolors="black", zorder=4)
-                ax.scatter(xs[-1:], ys[-1:], color=c, marker="*", s=90, edgecolors="black", zorder=4)
-                ax.annotate(str(i), (xs[0], ys[0]), fontsize=7, xytext=(3, 3),
-                            textcoords="offset points", zorder=5)
-            else:
-                ax.plot(xs, ys, color=FADED, lw=1.0, zorder=1)
+        _draw_plans(ax, grid, plans[name], changed[name])
         ax.set_title(titles[name], fontsize=10)
-    fig.suptitle("Coloured = agents whose path differs from the original PP plan; "
-                 "grey = unchanged", fontsize=9)
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
-    return _save(fig, out_path, dpi=130)
+    for ax in axes[0][len(names):]:
+        ax.axis("off")
+    if weights:
+        norm = weight_norm(list(weights.values()))
+        for ax, (kind, w) in zip(axes[1], weights.items()):
+            vals = draw_weights(ax, grid, w, norm)
+            for i, (s, g) in enumerate(zip(sc.starts, sc.goals)):
+                (sr, scol), (gr, gc) = grid.cell(s), grid.cell(g)
+                ax.scatter([scol], [sr], color=_agent_color(i), marker="o", s=22,
+                           edgecolors="black", zorder=5)
+                ax.scatter([gc], [gr], color=_agent_color(i), marker="*", s=60,
+                           edgecolors="black", zorder=5)
+            label = (weight_titles or {}).get(kind, kind)
+            ax.set_title(f"{label}: min {vals.min():.2f}, max {vals.max():.2f}", fontsize=10)
+        for ax in axes[1][len(weights):]:
+            ax.axis("off")
+        cb = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap="coolwarm"),
+                          ax=list(axes[1][:len(weights)]), fraction=0.03, pad=0.02)
+        cb.set_label("edge cost (blue = cheaper, red = dearer than original 1)")
+    top = "Top: coloured = agents whose path differs from the original PP plan, grey = unchanged."
+    if weights:
+        top += "  Bottom: edge costs the models assign (gradient)."
+    fig.suptitle((header + "\n" if header else "") + top, fontsize=9)
+    if not weights:
+        fig.tight_layout(rect=(0, 0, 1, 0.93))
+    else:
+        fig.subplots_adjust(top=0.9, hspace=0.12, wspace=0.05, left=0.02, right=0.97,
+                            bottom=0.02)
+    return _save(fig, out_path, dpi=120)
 
 
 def animate_comparison(grid, sc, plans, titles, out_path, fps=4):
@@ -169,7 +236,7 @@ def plot_training_curves(history, batch_losses, refs, best_epoch, kind, n, reduc
 
 
 METHOD_COLORS = {"PP (orig)": "#969696", "PP (Edge)": "#4292c6", "PP (GNN)": "#ec7014",
-                 "Expert": "#41ab5d"}
+                 "Expert": "#41ab5d", "CBS": "#6a51a3"}
 
 
 def plot_test_summary(per_instance, methods, out_path, title, expert_name="EECBS"):
@@ -192,7 +259,7 @@ def plot_test_summary(per_instance, methods, out_path, title, expert_name="EECBS
     ax.set_xticklabels(labels, fontsize=8)
     ax.set_xlabel("test instance")
     ax.set_ylabel(r"delay  ($\sum_e y_e$ $-$ lower bound)")
-    ax.set_title(title)
+    ax.set_title(title, fontsize=9)
     ax.legend(fontsize=8)
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()

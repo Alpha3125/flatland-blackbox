@@ -5,7 +5,7 @@ import textwrap
 
 import pytest
 
-from mapf_nco.metrics import delay, validate_solution
+from mapf_nco.metrics import delay, find_conflicts, validate_solution
 from mapf_nco.scenarios import (
     Scenario, assign_priority_order, load_dataset, make_rng, random_scenario, read_scen,
     save_dataset, write_scen,
@@ -87,27 +87,31 @@ def test_eecbs_wrapper_with_fake_binary(grid, tmp_path):
     validate_solution(grid, paths, sc.starts, sc.goals)
 
 
-def test_compare_writes_pictures(grid, tmp_path):
+def test_generate_and_both_test_modes(grid, tmp_path):
+    """generate stores EECBS/PP/CBS plans; testing works on saved and on new scenarios."""
     from conftest import MAP_PATH
-    from mapf_nco.compare import compare
+    from mapf_nco.evaluate import test_random, test_saved
+    from mapf_nco.experts import generate_datasets
     from mapf_nco.scenarios import dataset_path
 
-    scs = []
-    for seed in range(3):
-        sc = random_scenario(grid, 6, make_rng(seed))
-        assign_priority_order(grid, sc, make_rng(seed))
-        sc.expert_paths = solve_cbs(grid, sc.starts, sc.goals, time_limit=10)
-        scs.append(sc)
     cfg = {"map_path": MAP_PATH, "data_dir": str(tmp_path / "d"), "output_dir": str(tmp_path / "o"),
-           "w_min": 1e-3, "expert": "cbs", "expert_time_limit": 10}
-    save_dataset(dataset_path(cfg["data_dir"], grid.name, 6, "test"), grid, scs)
+           "w_min": 1e-3, "expert": "cbs", "expert_time_limit": 10, "cbs_time_limit": 10,
+           "num_train": 2, "num_test": 2, "seed": 0}
     quiet = lambda *a: None  # noqa: E731
-    plans = compare(cfg, 6, "test", None, None, kinds=(), animate=True, log=quiet)
-    assert "PP (orig)" in plans and "Expert" in plans
-    compare(cfg, 6, seed=7, kinds=(), log=quiet)  # fresh random scenario
-    out = tmp_path / "o" / grid.name / "n6" / "plots"
-    assert (out / "n6_seed7" / "comparison.png").exists()
-    assert any(out.glob("n6_test*/animation.gif"))
+    generate_datasets(cfg, [5], workers=1, log=quiet)
+    test, _ = load_dataset(dataset_path(cfg["data_dir"], grid.name, 5, "test"), grid)
+    for sc in test:
+        assert sc.pp_paths == solve_pp(grid, sc.starts, sc.goals, sc.order)
+        assert sc.cbs_paths is not None and not find_conflicts(sc.cbs_paths)
+
+    out = tmp_path / "o" / grid.name / "n5" / "test"
+    r = test_saved(cfg, 5, None, kinds=(), animate=True, log=quiet)
+    assert r["num_test"] == 2 and r["cbs_solved"] == 2
+    assert (out / "instance_001" / "comparison.png").exists()
+    assert (out / "instance_000" / "animation.gif").exists()
+    r = test_random(cfg, 5, 7, 2, seed=3, kinds=(), workers=1, log=quiet)
+    assert r["agents"] == 7
+    assert not (out / "instance_000" / "animation.gif").exists()  # folder was replaced
 
 
 def test_wsl_path_translation(monkeypatch):

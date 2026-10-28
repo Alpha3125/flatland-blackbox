@@ -103,38 +103,42 @@ python main.py          # settings from configs/paper.json
 ```
 
 ```
-Number of agents [50]: 50
---- random-32-32-20, 50 agents ---            (what already exists for this agent count)
-  1) Generate scenarios + expert (EECBS) plans
-  2) Train a model from scratch (Edge / GNN), then optionally test
-  3) Test: PP vs EECBS vs trained PP on N test instances (comparison plots)
-  4) Compare on one new random scenario
-  5) Change number of agents
+  1) Generate scenarios + EECBS, CBS and PP plans
+  2) Experiment: train the Edge and GNN models (choose hyperparameters)
+  3) Test: saved test scenarios, or new random scenarios (comparison plots)
+  4) Change number of agents
   0) Quit
 ```
 
-1. **Generate** asks how many training and test scenarios to make, then solves them with EECBS.
-2. **Train** asks which model and how many epochs. Every epoch prints the training loss and validation delay. At
-   the end it saves and opens the loss graph, then asks whether to test.
-3. **Test** asks how many test instances to use. It runs original PP and every trained model, reads the EECBS plan
-   stored with each instance, and writes comparison maps plus a summary chart and table. If no model is trained
-   yet, it compares PP with EECBS only.
+1. **Generate** samples the training and test scenarios and pre-computes three plans for each:
+   - **EECBS:** the expert plan the models learn from.
+   - **PP:** the original prioritized-planning plan.
+   - **CBS:** the optimal plan, from EECBS run at suboptimality 1.0. It has a time limit, so a few large
+     instances may have no CBS plan. At 50 agents the expert is already optimal, so it's reused.
 
-For a quick trial, answer the generate prompts with small numbers (e.g. 40 training and 5 test scenarios) and
-train for a few epochs.
+   For data generated earlier, choose "add missing PP/CBS plans" to keep the EECBS plans and only add the rest.
+2. **Experiment** asks for every hyperparameter (epochs, batch size, learning rate, lambda, loss, w_min,
+   validation fraction, seed and the GNN sizes), trains the Edge model and then the GNN, and opens both loss
+   graphs. It doesn't test.
+3. **Test** asks whether to use the saved test scenarios or new random ones. For new ones it also asks the number
+   of agents, which can differ from the training count, then solves them with EECBS and CBS on the spot. Every
+   test replaces `test/`. Each `comparison.png` has three parts:
+   - **Header:** the training hyperparameters and the best epoch.
+   - **Top row:** the plans of PP (orig), PP (Edge), PP (GNN), EECBS and CBS.
+   - **Bottom row:** the edge costs each model gives that scenario, as a blue (cheaper) to red (dearer)
+     gradient.
 
 ## Commands (same steps, for scripts)
 
 ```bash
-python main.py generate --agents 50                       # train + test scenarios with EECBS plans
-python main.py train    --agents 50 --model gnn --epochs 30
-python main.py test     --agents 50 --num 10 --animate    # first 10 test instances, with GIFs
-python main.py solve    --agents 50 --seed 7              # one brand-new random scenario, compared
-python main.py evaluate --agents 50 75 100                # paper's Table 1 (all test instances, no plots)
-python main.py all      --agents 50                       # generate -> train -> test
+python main.py generate   --agents 50                     # add --augment to keep existing data
+python main.py experiment --agents 50 --epochs 30 --lr 5e-4 --lam 1.0 --batch_size 8
+python main.py test       --agents 50 --num 10            # saved test scenarios
+python main.py test       --agents 50 --random 5 --test_agents 75   # 50-agent models, new 75-agent scenarios
+python main.py evaluate   --agents 50 75 100              # paper's Table 1, no plots
 ```
 
-`--set key=value` overrides any entry of `configs/paper.json`, e.g. `--set batch_size=16 num_test=10`.
+`--set key=value` overrides any entry of `configs/paper.json`.
 
 ## Where things are saved
 
@@ -153,7 +157,6 @@ outputs/random-32-32-20/n50/
         per_instance.csv            delay per instance and method
         instance_000/comparison.png PP (orig) | PP (Edge) | PP (GNN) | EECBS side by side
         instance_000/*.png          each method on its own (+ animation.gif with --animate)
-    plots/                          single-scenario comparisons from option 4 / `main.py solve`
 outputs/results/table1.md           from `main.py evaluate`
 ```
 
@@ -175,19 +178,6 @@ tensorboard --logdir outputs        # then open http://localhost:6006
   expert reference lines, and PP failures, zero-gradient scenarios and epoch time.
 - **HISTOGRAMS:** the Edge model's edge costs, one per epoch.
 - **IMAGES:** the loss graph, plus each test's comparison maps and summary chart.
-
-### Comparing single scenarios
-
-Option 4 in the menu, or `main.py solve`. It prints SOC, delay and makespan per method, which agents changed route
-compared with the original PP, and whose arrival time changed. It writes `comparison.png` to
-`outputs/<map>/n<N>/plots/<scenario>/`: agents whose path differs from the original PP are coloured and numbered,
-unchanged ones are grey.
-
-```bash
-python main.py solve --agents 50                 # delay table for all test scenarios, plots the most interesting
-python main.py solve --agents 50 --index 7       # a specific test scenario
-python main.py solve --agents 50 --seed 123      # a brand-new random scenario, solved by EECBS on the spot
-```
 
 ## Metrics
 
@@ -227,7 +217,7 @@ the paper's.
 ## Repository layout
 
 ```
-main.py                 interactive menu, or commands: generate | train | test | solve | evaluate | all
+main.py                 interactive menu, or commands: generate | experiment | test | evaluate
 configs/paper.json      all settings (paper defaults)
 mapf_nco/
   grid.py               MovingAI map -> grid graph with directed edges and self-loops
@@ -237,7 +227,7 @@ mapf_nco/
   solver_cbs.py         Python CBS fallback expert
   blackbox.py           black-box gradient through PP
   models.py             Edge and GraphSAGE models
-  compare.py / viz.py    comparisons, pictures, animations, training curves
+  compare.py / viz.py    test helpers, pictures, animations, training curves
   paths.py / tb.py       output folder layout, TensorBoard logging
   train.py / evaluate.py / experts.py / metrics.py
 scripts/build_eecbs.sh  builds EECBS into third_party/

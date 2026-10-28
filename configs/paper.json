@@ -11,6 +11,8 @@
   "eecbs_bin": null,
   "expert_time_limit": 120,
   "suboptimality": {"50": 1.0, "75": 1.05, "100": 1.05},
+  "with_cbs": true,
+  "cbs_time_limit": 60,
 
   "models": ["edge", "gnn"],
   "epochs": 30,

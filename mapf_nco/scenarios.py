@@ -24,8 +24,11 @@ class Scenario:
     starts: list
     goals: list
     order: list = None
-    expert_paths: list = None
+    expert_paths: list = None  # EECBS plan (the training target)
     expert_solver: str = None
+    pp_paths: list = None  # original PP plan (uniform costs, this priority order)
+    cbs_paths: list = None  # optimal plan (CBS), None if it timed out
+    cbs_solver: str = None
     meta: dict = field(default_factory=dict)
 
     @property
@@ -56,6 +59,9 @@ class Scenario:
             if self.expert_paths is None
             else [[int(v) for v in p] for p in self.expert_paths],
             "expert_solver": self.expert_solver,
+            "pp_paths": _paths(self.pp_paths),
+            "cbs_paths": _paths(self.cbs_paths),
+            "cbs_solver": self.cbs_solver,
             "meta": self.meta,
         }
 
@@ -67,8 +73,15 @@ class Scenario:
             order=d.get("order"),
             expert_paths=d.get("expert_paths"),
             expert_solver=d.get("expert_solver"),
+            pp_paths=d.get("pp_paths"),
+            cbs_paths=d.get("cbs_paths"),
+            cbs_solver=d.get("cbs_solver"),
             meta=dict(d.get("meta") or {}),
         )
+
+
+def _paths(paths):
+    return None if paths is None else [[int(v) for v in p] for p in paths]
 
 
 # ---------------------------------------------------------------- generation

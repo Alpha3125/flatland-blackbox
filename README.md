@@ -214,6 +214,31 @@ tensorboard --logdir outputs        # then open http://localhost:6006
   e.g. 56.20 vs 23.96 → 134.6 %.
 - Agents stay at their goal after arriving. Sum-of-costs counts each agent's final arrival time.
 
+## Makespan objective (extension, not in the paper)
+
+The paper's loss makes PP copy EECBS, which minimises the **sum** of arrival times. Setting `objective` to
+`makespan` instead trains the edge weights to minimise the **latest** arrival time in a scenario. It needs no
+expert plans.
+
+- **Loss:** a smooth maximum of the agents' arrival times, L = τ·log Σᵢ exp(Tᵢ/τ), with Tᵢ = Σₑ ŷᵢₑ. Each agent
+  uses one edge per timestep, so Tᵢ is the sum of its own edge usage. As τ → 0 this becomes the exact makespan.
+- **Lateness weights:** the gradient with respect to agent i is αᵢ = softmaxᵢ(T/τ), so it's concentrated on the
+  agents that finish last.
+- **Perturbation:** in PP every agent already takes its fastest route given the agents planned before it. A late
+  agent is late because others are in its way, so the perturbation raises the costs of the late agents' routes for
+  all *other* agents: agent j gets λ·Σᵢ≠ⱼ αᵢ·rᵢ, where rᵢ marks the cells on agent i's ideal route. Each late agent
+  also gets λ·αᵢ added to every one of its own steps. PP is run again with these per-agent costs.
+- **Gradient:** the shared edge weights get −(ŷ − y_λ)/λ on total usage, the same rule as the paper, by the chain
+  rule.
+- **`usage+makespan`:** combines the paper's loss with `makespan_weight` × the makespan loss.
+- **Best epoch:** with a makespan objective it's chosen by validation makespan instead of delay.
+
+Every test also reports makespan and the **makespan lower bound** (the longest single shortest path; no plan can
+beat it). On random-32-32-20 with 50 agents, PP is on average only about 2 steps above that bound and already
+optimal in about half the scenarios, so gains are small by nature. In a quick check, the Edge model closed roughly
+15% of that gap. Set it in the experiment menu, or use
+`python main.py experiment --objective makespan --lam 1 --lr 0.002`.
+
 ## Choices where the paper leaves details open
 
 These are documented so they can be changed if the authors clarify them:

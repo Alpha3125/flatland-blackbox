@@ -95,24 +95,29 @@ def run_test(cfg, grid, trained_n, scenarios, ename, label, kinds=("edge", "gnn"
     for i, sc in enumerate(tqdm(scenarios, desc="test", unit="inst")):
         plans, t, weights = plan_all_timed(planner, sc, models)
         lb = sc.lower_bound(grid)
-        row = {"instance": i, "agents": sc.num_agents, "lower_bound": lb}
+        row = {"instance": i, "agents": sc.num_agents, "lower_bound": lb,
+               "makespan_lower_bound": int(max(grid.bfs_distances(g)[s]
+                                               for s, g in zip(sc.starts, sc.goals)))}
         for m in methods:
             paths = plans.get(m)
             if paths is None and m in KEY and m != "CBS":
                 fails[m] += 1  # learned weights made PP fail: fall back to original PP
                 paths = plans[REF]
             row[m] = None if paths is None else sum_of_costs(paths) - lb
+            row[f"{m} makespan"] = None if paths is None else max(len(p) - 1 for p in paths)
             if m in t:
                 times[m].append(t[m])
         per_instance.append(row)
-        say(f"  instance {i:3d}: " + "  ".join(
-            f"{names[m]} {'-' if row[m] is None else row[m]}" for m in methods))
+        say(f"  instance {i:3d} (delay/makespan): " + "  ".join(
+            f"{names[m]} {'-' if row[m] is None else row[m]}/"
+            f"{'-' if row[m + ' makespan'] is None else row[m + ' makespan']}" for m in methods))
 
         if plots:
             idir = os.path.join(out, f"instance_{i:03d}")
             ok = {m: p for m, p in plans.items() if p is not None}
             titles = {m: f"{names.get(m, m)}: $\\sum_e y_e$ = {sum_of_costs(p)},  "
-                         f"delay {sum_of_costs(p) - lb}" for m, p in ok.items()}
+                         f"delay {sum_of_costs(p) - lb},  makespan {max(len(q) - 1 for q in p)}"
+                      for m, p in ok.items()}
             comp = plot_comparison(
                 grid, sc, ok, titles, os.path.join(idir, "comparison.png"), REF,
                 weights=weights, weight_titles=WEIGHT_LABELS,
@@ -150,6 +155,9 @@ def _aggregate(n, per_instance, methods, times, fails):
     expert = [r["Expert"] for r in per_instance if r["Expert"] is not None]
     e = float(np.mean(expert)) if expert else float("nan")
     row = {"agents": n, "num_test": len(per_instance), "expert_delay": e}
+    row["makespan_lower_bound"] = float(np.mean([r["makespan_lower_bound"] for r in per_instance]))
+    em = [r["Expert makespan"] for r in per_instance if r.get("Expert makespan") is not None]
+    row["expert_makespan"] = float(np.mean(em)) if em else float("nan")
     for m in methods:
         if m == "Expert":
             continue
@@ -158,6 +166,8 @@ def _aggregate(n, per_instance, methods, times, fails):
         d = float(np.mean(vals)) if vals else float("nan")
         row[f"{key}_delay"] = d
         row[f"{key}_gap"] = optimality_gap(d, e) if expert and vals else float("nan")
+        spans = [r[f"{m} makespan"] for r in per_instance if r.get(f"{m} makespan") is not None]
+        row[f"{key}_makespan"] = float(np.mean(spans)) if spans else float("nan")
         if key == "cbs":
             row["cbs_solved"] = len(vals)
             continue
@@ -197,6 +207,18 @@ def format_table(rows):
     lines.append(f"Average delay (% optimality gap relative to {ename}) over "
                  f"{', '.join(str(r['num_test']) for r in rows)} instance(s). Lower is better. "
                  "CBS is averaged over the instances it solved within its time limit.")
+    lines += ["", f"| Agents | PP (orig) | PP (Edge) | PP (GNN) | {ename} | CBS (optimal) | "
+                  "lower bound |", "|---:|---:|---:|---:|---:|---:|---:|"]
+    for r in rows:
+        cells = [f"{r[f'{m}_makespan']:.2f}" if f"{m}_makespan" in r else "—"
+                 for m in ("orig", "edge", "gnn")]
+        cbs = f"{r['cbs_makespan']:.2f}" if r.get("cbs_solved") else "—"
+        lines.append(f"| {r['agents']} | " + " | ".join(cells)
+                     + f" | {r.get('expert_makespan', float('nan')):.2f} | {cbs} | "
+                     f"{r.get('makespan_lower_bound', float('nan')):.2f} |")
+    lines += ["", "Average makespan (latest arrival time in a scenario). Lower is better. "
+              "Lower bound = longest single shortest path; no plan can beat it. EECBS and CBS "
+              "minimise the sum of costs, not the makespan."]
     timing = []
     for r in rows:
         parts = [f"{m}: {r[f'{m}_time'] * 1000:.1f} ms" for m in ("orig", "edge", "gnn")

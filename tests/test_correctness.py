@@ -234,3 +234,54 @@ def test_blackbox_matches_paper_equations(grid):
     grad = -(y_hat - y_lam) / lam  # Eq. 6
     assert r.loss == pytest.approx(loss)
     assert np.array_equal(r.grad, grad)
+
+
+# ---------------------------------------------------------------- makespan
+def test_agent_offsets_make_agent_time_averse(open_grid):
+    """An offset c adds c to every step of that agent: zero = unchanged, large = shortest in time."""
+    from mapf_nco.solver_pp import solve_pp
+
+    g = open_grid
+    s, t = g.node(2, 0), g.node(2, 4)
+    w = np.ones(g.num_edges)
+    for c in range(4):  # straight row expensive -> detour of 6 steps preferred
+        w[g.edge_matrix[g.node(2, c), g.node(2, c + 1)]] = 1.8
+    (detour,) = solve_pp(g, [s], [t], weights=w)
+    assert len(detour) - 1 == 6
+    assert solve_pp(g, [s], [t], weights=w) == PrioritizedPlanner(g).solve(
+        [s], [t], None, w, agent_offsets=np.zeros(1))
+    (direct,) = PrioritizedPlanner(g).solve([s], [t], None, w, agent_offsets=np.array([5.0]))
+    assert len(direct) - 1 == 4  # 4 x (1.8+5) < 6 x (1+5)
+
+
+def test_makespan_loss_is_smooth_max():
+    from mapf_nco.blackbox import makespan_loss
+
+    paths = [[0] * 11, [0] * 31, [0] * 21]  # arrival times 10, 30, 20
+    for tau in (0.1, 1.0, 5.0):
+        loss, alpha = makespan_loss(paths, tau)
+        assert 30 <= loss <= 30 + tau * np.log(3) + 1e-9
+        assert alpha.sum() == pytest.approx(1.0) and alpha.argmax() == 1
+    assert makespan_loss(paths, 0.01)[0] == pytest.approx(30, abs=1e-6)
+
+
+def test_blackbox_makespan_matches_hand_computation(grid):
+    """makespan objective: perturb with makespan_perturbation, gradient on total usage."""
+    from mapf_nco.blackbox import makespan_loss
+
+    sc = random_scenario(grid, 20, make_rng(4))
+    assign_priority_order(grid, sc, make_rng(4))
+    planner = PrioritizedPlanner(grid)
+    w = np.random.default_rng(0).uniform(0.8, 1.2, grid.num_edges)
+    lam, tau = 2.0, 1.0
+    r = blackbox_step(planner, sc.starts, sc.goals, sc.order, w, None, lam, objective="makespan",
+                      tau=tau)
+    paths = planner.solve(sc.starts, sc.goals, sc.order, w)
+    loss, alpha = makespan_loss(paths, tau)
+    y_hat = edge_usage(grid, paths)
+    from mapf_nco.blackbox import makespan_perturbation
+
+    offs = [lam * o for o in makespan_perturbation(planner, sc.starts, sc.goals, w, alpha)]
+    y_lam = edge_usage(grid, planner.solve(sc.starts, sc.goals, sc.order, w, offs))
+    assert r.loss == pytest.approx(loss)
+    assert np.array_equal(r.grad, -(y_hat - y_lam) / lam)

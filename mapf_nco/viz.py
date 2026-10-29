@@ -196,17 +196,29 @@ def animate_comparison(grid, sc, plans, titles, out_path, fps=4):
 
 
 LOSS_FORMULA = {
-    "mean": r"$L(\hat y, y^*) = \frac{1}{M}\sum_{e} (\hat y_e - y^*_e)^2$",
-    "sum": r"$L(\hat y, y^*) = \sum_{e} (\hat y_e - y^*_e)^2$",
+    "mean": r"$L = \frac{1}{M}\sum_{e} (\hat y_e - y^*_e)^2$",
+    "sum": r"$L = \sum_{e} (\hat y_e - y^*_e)^2$",
 }
+MAKESPAN_FORMULA = r"$\tau \log \sum_i e^{T_i/\tau}$,  $T_i = \sum_e \hat y_{i,e}$"
+
+
+def loss_title(refs, reduction):
+    obj = refs.get("objective", "usage")
+    if obj == "makespan":
+        return "Training loss (smooth makespan)   " + MAKESPAN_FORMULA + f",  $\\tau$={refs['tau']}"
+    if obj == "usage+makespan":
+        return ("Training loss: usage + " + f"{refs['beta']}" + r" $\times$ makespan" + "\n"
+                + LOSS_FORMULA.get(reduction, "") + "  +  " + MAKESPAN_FORMULA)
+    return "Training loss   " + LOSS_FORMULA.get(reduction, "")
 
 
 def plot_training_curves(history, batch_losses, refs, best_epoch, kind, n, reduction, out_path):
-    """Loss and validation delay per epoch, with the loss function in the title."""
+    """Loss and the validation metric per epoch, with the loss function in the title."""
+    metric = refs.get("metric", "delay")
     epochs = [h["epoch"] for h in history]
     loss = [h.get("train_loss") for h in history]
-    val = [h["val_delay"] for h in history]
-    fig, (a1, a2) = plt.subplots(1, 2, figsize=(12, 4.6))
+    val = [h[f"val_{metric}"] for h in history]
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(12, 4.8))
 
     if batch_losses:
         bx, by = zip(*batch_losses)
@@ -215,22 +227,25 @@ def plot_training_curves(history, batch_losses, refs, best_epoch, kind, n, reduc
     if pts:
         a1.plot(*zip(*pts), "o-", color="#08519c", lw=2, label="epoch mean")
     a1.set_xlabel("epoch")
-    a1.set_ylabel("usage loss")
-    a1.set_title("Training loss   " + LOSS_FORMULA.get(reduction, ""), fontsize=11)
+    a1.set_ylabel("loss")
+    a1.set_title(loss_title(refs, reduction), fontsize=10)
     a1.grid(alpha=0.3)
     a1.legend(fontsize=8)
 
     a2.plot(epochs, val, "o-", color="#d94801", lw=2, label=f"PP ({kind})")
     a2.axhline(refs["orig_pp"], color="gray", ls="--", label=f"original PP ({refs['orig_pp']:.2f})")
-    a2.axhline(refs["expert"], color="green", ls=":", label=f"{refs.get('expert_name', 'EECBS')} ({refs['expert']:.2f})")
+    a2.axhline(refs["expert"], color="green", ls=":",
+               label=f"{refs.get('expert_name', 'EECBS')} ({refs['expert']:.2f})")
     a2.scatter([best_epoch], [val[epochs.index(best_epoch)]], s=160, marker="*", color="gold",
                edgecolors="black", zorder=5, label=f"selected (epoch {best_epoch})")
     a2.set_xlabel("epoch")
-    a2.set_ylabel(r"validation delay  ($\sum_e y_e$ $-$ lower bound)")
-    a2.set_title("Validation delay (lower is better)", fontsize=11)
+    a2.set_ylabel(r"validation delay  ($\sum_e y_e$ $-$ lower bound)" if metric == "delay"
+                  else "validation makespan (max arrival time)")
+    a2.set_title(f"Validation {metric} (lower is better)", fontsize=11)
     a2.grid(alpha=0.3)
     a2.legend(fontsize=8)
-    fig.suptitle(f"{kind} model, {n} agents", fontsize=12)
+    fig.suptitle(f"{kind} model, {n} agents, objective: {refs.get('objective', 'usage')}",
+                 fontsize=12)
     fig.tight_layout()
     return _save(fig, out_path, dpi=130)
 

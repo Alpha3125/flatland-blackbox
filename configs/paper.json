@@ -20,6 +20,9 @@
   "lr": 0.0005,
   "lam": 1.0,
   "loss_reduction": "mean",
+  "objective": "usage",
+  "makespan_tau": 1.0,
+  "makespan_weight": 0.001,
   "w_min": 0.001,
   "gnn": {"hidden": 64, "num_freqs": 6, "id_dim": 8, "mlp_hidden": 64},
 

@@ -80,7 +80,12 @@ def hparams_header(models, trained_n):
         return "No trained models: original PP vs EECBS/CBS only"
     any_info = next(iter(models.values())).ckpt_info
     c = any_info.get("config", {})
-    parts = [f"trained on {trained_n} agents",
+    obj = c.get("objective", "usage")
+    if obj == "makespan":
+        obj += f" (tau {c.get('makespan_tau', 1.0)})"
+    elif obj == "usage+makespan":
+        obj += f" (tau {c.get('makespan_tau', 1.0)}, weight {c.get('makespan_weight', 0.001)})"
+    parts = [f"objective {obj}", f"trained on {trained_n} agents",
              f"epochs {c.get('epochs')}", f"batch {c.get('batch_size')}",
              f"lr {c.get('lr')}", f"lambda {c.get('lam')}",
              f"loss {c.get('loss_reduction', 'mean')}", f"w_min {c.get('w_min')}",

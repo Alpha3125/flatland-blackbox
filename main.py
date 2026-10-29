@@ -165,8 +165,18 @@ def ask_hyperparameters(cfg):
     cfg["batch_size"] = ask("    batch size (scenarios per update)", cfg["batch_size"], int)
     cfg["lr"] = ask("    learning rate (Adam)", cfg["lr"], float)
     cfg["lam"] = ask("    lambda (perturbation strength, Eq. 5)", cfg["lam"], float)
-    cfg["loss_reduction"] = ask("    loss: mean (paper, 1/M) or sum", cfg["loss_reduction"], str,
-                                ["mean", "sum"])
+    cfg["objective"] = ask("    objective: usage (paper: match EECBS), makespan (minimise the "
+                           "latest arrival), usage+makespan", cfg.get("objective", "usage"), str,
+                           ["usage", "makespan", "usage+makespan"])
+    if cfg["objective"] != "usage":
+        cfg["makespan_tau"] = ask("    makespan smoothness tau (small = closer to the true max)",
+                                  cfg.get("makespan_tau", 1.0), float)
+    if cfg["objective"] == "usage+makespan":
+        cfg["makespan_weight"] = ask("    weight of the makespan term",
+                                     cfg.get("makespan_weight", 0.001), float)
+    if cfg["objective"] != "makespan":
+        cfg["loss_reduction"] = ask("    usage loss: mean (paper, 1/M) or sum",
+                                    cfg["loss_reduction"], str, ["mean", "sum"])
     cfg["w_min"] = ask("    w_min (smallest allowed edge cost)", cfg["w_min"], float)
     cfg["val_fraction"] = ask("    validation fraction of the training scenarios",
                               cfg["val_fraction"], float)
@@ -267,6 +277,12 @@ def menu_sweep(cfg, n, info):
             cfg["augment"] = True
     g = cfg.get("gnn", {})
     grid_values = {
+        "objective": _ask_values("  objective (usage / makespan / usage+makespan)",
+                                 cfg.get("objective", "usage"), str),
+        "makespan_tau": _ask_values("  makespan tau (used by the makespan objectives)",
+                                    cfg.get("makespan_tau", 1.0), float),
+        "makespan_weight": _ask_values("  makespan weight (used by usage+makespan)",
+                                       cfg.get("makespan_weight", 0.001), float),
         "epochs": _ask_values("  epochs", cfg["epochs"], int),
         "batch_size": _ask_values("  batch size", cfg["batch_size"], int),
         "lr": _ask_values("  learning rate", cfg["lr"], float),
@@ -282,6 +298,9 @@ def menu_sweep(cfg, n, info):
     }
     if any(v not in ("mean", "sum") for v in grid_values["loss_reduction"]):
         print("  loss must be 'mean' or 'sum'")
+        return
+    if any(v not in ("usage", "makespan", "usage+makespan") for v in grid_values["objective"]):
+        print("  objective must be usage, makespan or usage+makespan")
         return
     k = len(expand_grid(grid_values))
     test_count = ask("  Saved test instances per experiment", info["test"] or cfg["num_test"], int)
@@ -342,7 +361,8 @@ def interactive(config_path):
 
 # --------------------------------------------------------------- commands
 HPARAMS = ("epochs", "batch_size", "lr", "lam", "loss_reduction", "w_min", "val_fraction",
-           "seed", "device", "expert", "eecbs_bin", "cbs_time_limit")
+           "seed", "device", "expert", "eecbs_bin", "cbs_time_limit", "objective",
+           "makespan_tau", "makespan_weight")
 
 
 def parse_args(argv=None):
@@ -377,6 +397,10 @@ def parse_args(argv=None):
                       ("w_min", float), ("val_fraction", float), ("seed", int)):
         x.add_argument(f"--{name}", type=typ)
     x.add_argument("--loss_reduction", choices=["mean", "sum"])
+    x.add_argument("--objective", choices=["usage", "makespan", "usage+makespan"],
+                   help="usage = paper (match EECBS); makespan = minimise the latest arrival")
+    x.add_argument("--makespan_tau", type=float)
+    x.add_argument("--makespan_weight", type=float)
     x.add_argument("--device")
 
     t = sub.add_parser("test", help="compare PP / EECBS / CBS / trained PP with plots")
@@ -463,8 +487,8 @@ def main(argv=None):
             key, _, vals = item.partition("=")
             if key not in SWEEPABLE:
                 raise SystemExit(f"cannot sweep '{key}'; choose from {', '.join(SWEEPABLE)}")
-            grid_values[key] = [json.loads(v) if v not in ("mean", "sum") else v
-                                for v in vals.split(",")]
+            grid_values[key] = [v if v in ("mean", "sum", "usage", "makespan", "usage+makespan")
+                                else json.loads(v) for v in vals.split(",")]
         for n in agents:
             generate_datasets(dict(cfg, augment=True), [n], workers=workers)
             run_sweep(cfg, n, grid_values or {"lr": [cfg["lr"]]}, args.num, args.second_agents,

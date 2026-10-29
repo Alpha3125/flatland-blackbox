@@ -74,7 +74,7 @@ class PrioritizedPlanner:
         self._unit_h_cache = {}
 
     # ------------------------------------------------------------------ public
-    def solve(self, starts, goals, order=None, weights=None):
+    def solve(self, starts, goals, order=None, weights=None, agent_offsets=None):
         """Plan all agents.
 
         Args:
@@ -83,6 +83,10 @@ class PrioritizedPlanner:
                 ascending-distance order of the paper.
             weights: array of shape (num_edges,) with learned costs. ``None``
                 means the original uniform cost 1 on every edge.
+            agent_offsets: optional per-agent extra costs: agent i plans with
+                ``weights + agent_offsets[i]``, where the entry is a number (an
+                extra price on every step, waits included) or an array of shape
+                (num_edges,). Used by the makespan objective's perturbation.
 
         Returns:
             list of paths (lists of node ids, one entry per timestep), indexed by
@@ -103,12 +107,18 @@ class PrioritizedPlanner:
 
         res = ReservationTable(self.grid.num_nodes)
         paths = [None] * n
+        base = w if w is not None else np.ones(self.grid.num_edges)
         for k, i in enumerate(order):
-            if h_all is None:
+            wi = w
+            off = None if agent_offsets is None else agent_offsets[i]
+            if off is not None and np.any(off):
+                wi = np.maximum(base + off, self.w_min)
+                h = self.grid.weighted_distances_to([goals[i]], wi)[0]
+            elif h_all is None:
                 h = self._unit_h(goals[i])
             else:
                 h = h_all[k]
-            path = self._space_time_astar(starts[i], goals[i], h, w, res)
+            path = self._space_time_astar(starts[i], goals[i], h, wi, res)
             if path is None:
                 raise NoSolutionError(i)
             res.reserve(path)

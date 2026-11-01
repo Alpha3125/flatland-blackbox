@@ -70,9 +70,12 @@ class GNNModel(nn.Module):
     """Two-layer GraphSAGE edge-cost predictor (the paper's "GNN" model)."""
 
     def __init__(self, grid, hidden=64, num_freqs=6, id_dim=8, max_agents=128,
-                 mlp_hidden=64):
+                 mlp_hidden=64, seq_dim=0):
         super().__init__()
         self.max_agents = max_agents
+        # seq_dim > 0: sequential model; extra per-node channels describe the
+        # reservations of the agents planned so far (see mapf_nco/sequential.py).
+        self.seq_dim = seq_dim
         pos = sinusoidal_positions(grid.coords, grid.height, grid.width, num_freqs)
         deg = (grid.degree.astype(np.float32) / 4.0)[:, None]  # static obstacle context
         self.register_buffer("static_feats", torch.from_numpy(np.concatenate([pos, deg], 1)))
@@ -88,7 +91,7 @@ class GNNModel(nn.Module):
         # Agent ID = the agent's rank in the PP priority order, which is what
         # distinguishes agents from PP's point of view.
         self.id_emb = nn.Embedding(max_agents, id_dim)
-        d_in = self.static_feats.shape[1] + 2 + 2 * id_dim
+        d_in = self.static_feats.shape[1] + 2 + 2 * id_dim + seq_dim
         self.sage1 = SAGELayer(d_in, hidden)
         self.sage2 = SAGELayer(hidden, hidden)
         self.edge_mlp = nn.Sequential(
@@ -113,7 +116,13 @@ class GNNModel(nn.Module):
         id_start = id_start.scatter_add(1, idx(starts), ids)
         id_goal = id_goal.scatter_add(1, idx(goals), ids)
         static = self.static_feats.unsqueeze(0).expand(B, -1, -1)
-        return torch.cat([static, demand, id_start, id_goal], dim=-1)
+        parts = [static, demand, id_start, id_goal]
+        if self.seq_dim:
+            seq = batch.get("seq")
+            if seq is None:  # no reservations yet (e.g. a static call)
+                seq = torch.zeros(B, N, self.seq_dim, device=dev)
+            parts.append(seq)
+        return torch.cat(parts, dim=-1)
 
     def forward(self, batch):
         h = self.node_features(batch)
@@ -132,10 +141,14 @@ def build_model(kind, grid, **kwargs):
     raise ValueError(f"Unknown model type: {kind}")
 
 
-def make_batch(scenarios, device="cpu"):
+def make_batch(scenarios, device="cpu", seq=None):
+    """Model input for a list of scenarios. ``seq`` (B, N, R): reservation features."""
     starts, goals, ranks = scenario_arrays(scenarios)
-    return {
+    batch = {
         "starts": torch.from_numpy(starts).to(device),
         "goals": torch.from_numpy(goals).to(device),
         "ranks": torch.from_numpy(ranks).to(device),
     }
+    if seq is not None:
+        batch["seq"] = torch.from_numpy(np.ascontiguousarray(seq, dtype=np.float32)).to(device)
+    return batch

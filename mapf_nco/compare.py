@@ -45,10 +45,17 @@ def predict(model, sc, w_min):
     return np.maximum(w, w_min)
 
 
+def model_method(model):
+    return getattr(model, "ckpt_info", {}).get("config", {}).get("method", "static")
+
+
 def plan_all_timed(planner, sc, models):
     """Plans of every method for one scenario, timings, and the models' edge costs.
 
-    Returns (plans, times, weights). A learned PP that fails maps to None. The
+    Returns (plans, times, weights, seq_weights). A learned PP that fails maps
+    to None. Sequential models (method seq_*) are called before every agent:
+    ``weights`` then holds the mean over agents and ``seq_weights[kind]`` the
+    cost vector each agent planned with (indexed by agent). The
     original PP runs with explicit unit costs so it uses the same heuristic code
     path as the learned models (fair timing; the plan is identical to the stored
     one). EECBS and CBS plans come from the dataset.
@@ -57,9 +64,27 @@ def plan_all_timed(planner, sc, models):
     plans = {REF: planner.solve(sc.starts, sc.goals, sc.order,
                                 np.ones(planner.grid.num_edges))}
     times = {REF: time.perf_counter() - t0}
-    weights = {}
+    weights, seq_weights = {}, {}
     for kind, model in models.items():
         t0 = time.perf_counter()
+        if model_method(model) != "static":
+            from mapf_nco.sequential import cost_fn_for, sequential_pp
+
+            fn = cost_fn_for(model, sc)
+            try:
+                paths, W, _ = sequential_pp(planner, sc.starts, sc.goals, sc.order, fn)
+                plans[LABELS[kind]] = paths
+            except NoSolutionError:
+                plans[LABELS[kind]] = None
+                W = []
+            times[LABELS[kind]] = time.perf_counter() - t0
+            if W and all(w is not None for w in W):
+                W = [np.maximum(w, planner.w_min) for w in W]
+                seq_weights[kind] = W
+                weights[kind] = np.mean(W, axis=0)
+            else:  # failed part-way: show the costs of the first agent
+                weights[kind] = predict(model, sc, planner.w_min)
+            continue
         w = predict(model, sc, planner.w_min)
         try:
             plans[LABELS[kind]] = planner.solve(sc.starts, sc.goals, sc.order, w)
@@ -71,7 +96,7 @@ def plan_all_timed(planner, sc, models):
         plans["Expert"] = sc.expert_paths
     if sc.cbs_paths:
         plans["CBS"] = sc.cbs_paths
-    return plans, times, weights
+    return plans, times, weights, seq_weights
 
 
 def hparams_header(models, trained_n):
@@ -85,7 +110,8 @@ def hparams_header(models, trained_n):
         obj += f" (tau {c.get('makespan_tau', 1.0)})"
     elif obj == "usage+makespan":
         obj += f" (tau {c.get('makespan_tau', 1.0)}, weight {c.get('makespan_weight', 0.001)})"
-    parts = [f"objective {obj}", f"trained on {trained_n} agents",
+    meths = sorted({model_method(m) for m in models.values()})
+    parts = [f"method {'/'.join(meths)}", f"objective {obj}", f"trained on {trained_n} agents",
              f"epochs {c.get('epochs')}", f"batch {c.get('batch_size')}",
              f"lr {c.get('lr')}", f"lambda {c.get('lam')}",
              f"loss {c.get('loss_reduction', 'mean')}", f"w_min {c.get('w_min')}",

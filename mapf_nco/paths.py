@@ -6,7 +6,8 @@
         training/{edge,gnn}/                           curves.png, history.csv, history.json
         tensorboard/{edge,gnn,test}/                   TensorBoard logs
         test/                                          comparison plots + tables (replaced on every test)
-        plots/                                         single-scenario comparisons (main.py solve)
+        test_n<M>/                                     second test set of a sweep
+    outputs/sweeps/<map>_n<N>_<date>/                  sweeps (one exp_XX/ per experiment)
 """
 
 from __future__ import annotations
@@ -33,10 +34,6 @@ def tensorboard_dir(cfg, map_name, n, name):
 
 def test_dir(cfg, map_name, n, name="test"):
     return os.path.join(run_dir(cfg, map_name, n), name)
-
-
-def plots_dir(cfg, map_name, n):
-    return os.path.join(run_dir(cfg, map_name, n), "plots")
 
 
 def fresh_dir(path):

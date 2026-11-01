@@ -1,13 +1,12 @@
 import os
 import stat
 import sys
-import textwrap
 
 import pytest
 
 from mapf_nco.metrics import delay, find_conflicts, validate_solution
 from mapf_nco.scenarios import (
-    Scenario, assign_priority_order, load_dataset, make_rng, random_scenario, read_scen,
+    assign_priority_order, load_dataset, make_rng, random_scenario, read_scen,
     save_dataset, write_scen,
 )
 from mapf_nco.solver_cbs import solve_cbs

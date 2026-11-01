@@ -16,6 +16,7 @@ Or use the commands directly:
     python main.py test       --agents 50 --num 10                       saved test scenarios
     python main.py test       --agents 50 --random 5 --test_agents 75     new random scenarios
     python main.py sweep      --agents 50 --grid lr=1e-4,5e-4 lam=0.5,1   4 experiments
+    python main.py sweep      --agents 50 --grid method=static,seq_blackbox,seq_teacher
     python main.py evaluate   --agents 50 75 100                          Table 1, no plots
 
 ``--set key=value`` overrides any entry of the config file.
@@ -165,6 +166,13 @@ def ask_hyperparameters(cfg):
     cfg["batch_size"] = ask("    batch size (scenarios per update)", cfg["batch_size"], int)
     cfg["lr"] = ask("    learning rate (Adam)", cfg["lr"], float)
     cfg["lam"] = ask("    lambda (perturbation strength, Eq. 5)", cfg["lam"], float)
+    print("    method: static       = paper, one cost map per scenario")
+    print("            seq_blackbox = costs recomputed before each agent from the reservations,")
+    print("                           black-box gradient through the whole sequential PP")
+    print("            seq_teacher  = same model, Gelato-style: trained step by step on")
+    print("                           partial expert plans (teacher forcing)")
+    cfg["method"] = ask("    method", cfg.get("method", "static"), str,
+                        ["static", "seq_blackbox", "seq_teacher"])
     cfg["objective"] = ask("    objective: usage (paper: match EECBS), makespan (minimise the "
                            "latest arrival), usage+makespan", cfg.get("objective", "usage"), str,
                            ["usage", "makespan", "usage+makespan"])
@@ -277,6 +285,8 @@ def menu_sweep(cfg, n, info):
             cfg["augment"] = True
     g = cfg.get("gnn", {})
     grid_values = {
+        "method": _ask_values("  method (static / seq_blackbox / seq_teacher)",
+                              cfg.get("method", "static"), str),
         "objective": _ask_values("  objective (usage / makespan / usage+makespan)",
                                  cfg.get("objective", "usage"), str),
         "makespan_tau": _ask_values("  makespan tau (used by the makespan objectives)",
@@ -298,6 +308,9 @@ def menu_sweep(cfg, n, info):
     }
     if any(v not in ("mean", "sum") for v in grid_values["loss_reduction"]):
         print("  loss must be 'mean' or 'sum'")
+        return
+    if any(v not in ("static", "seq_blackbox", "seq_teacher") for v in grid_values["method"]):
+        print("  method must be static, seq_blackbox or seq_teacher")
         return
     if any(v not in ("usage", "makespan", "usage+makespan") for v in grid_values["objective"]):
         print("  objective must be usage, makespan or usage+makespan")
@@ -362,7 +375,7 @@ def interactive(config_path):
 # --------------------------------------------------------------- commands
 HPARAMS = ("epochs", "batch_size", "lr", "lam", "loss_reduction", "w_min", "val_fraction",
            "seed", "device", "expert", "eecbs_bin", "cbs_time_limit", "objective",
-           "makespan_tau", "makespan_weight")
+           "makespan_tau", "makespan_weight", "method")
 
 
 def parse_args(argv=None):
@@ -399,6 +412,8 @@ def parse_args(argv=None):
     x.add_argument("--loss_reduction", choices=["mean", "sum"])
     x.add_argument("--objective", choices=["usage", "makespan", "usage+makespan"],
                    help="usage = paper (match EECBS); makespan = minimise the latest arrival")
+    x.add_argument("--method", choices=["static", "seq_blackbox", "seq_teacher"],
+                   help="static = paper; seq_* = costs recomputed before each agent")
     x.add_argument("--makespan_tau", type=float)
     x.add_argument("--makespan_weight", type=float)
     x.add_argument("--device")
@@ -487,8 +502,9 @@ def main(argv=None):
             key, _, vals = item.partition("=")
             if key not in SWEEPABLE:
                 raise SystemExit(f"cannot sweep '{key}'; choose from {', '.join(SWEEPABLE)}")
-            grid_values[key] = [v if v in ("mean", "sum", "usage", "makespan", "usage+makespan")
-                                else json.loads(v) for v in vals.split(",")]
+            words = ("mean", "sum", "usage", "makespan", "usage+makespan", "static",
+                     "seq_blackbox", "seq_teacher")
+            grid_values[key] = [v if v in words else json.loads(v) for v in vals.split(",")]
         for n in agents:
             generate_datasets(dict(cfg, augment=True), [n], workers=workers)
             run_sweep(cfg, n, grid_values or {"lr": [cfg["lr"]]}, args.num, args.second_agents,

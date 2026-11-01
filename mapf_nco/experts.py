@@ -78,11 +78,13 @@ def _add_pp_cbs(sc, expert, opts):
         t0 = time.time()
         sc.pp_paths = PrioritizedPlanner(_G).solve(sc.starts, sc.goals, sc.order)
         sc.meta["pp_time"] = time.time() - t0
-    if sc.cbs_paths is not None or not opts.get("with_cbs", True):
+    if sc.cbs_paths is not None:
         return
     if expert == "cbs" or (expert == "eecbs" and float(opts["suboptimality"]) == 1.0):
-        sc.cbs_paths, sc.cbs_solver = sc.expert_paths, sc.expert_solver  # already optimal
+        sc.cbs_paths, sc.cbs_solver = sc.expert_paths, sc.expert_solver  # already optimal: free
         sc.meta["cbs_time"] = sc.meta.get("expert_time")
+        return
+    if not opts.get("with_cbs", True):
         return
     t0 = time.time()
     if opts.get("eecbs_bin"):

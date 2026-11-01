@@ -76,7 +76,8 @@ def test_random(cfg, trained_n, num_agents, count, seed=12345, kinds=("edge", "g
 def run_test(cfg, grid, trained_n, scenarios, ename, label, kinds=("edge", "gnn"),
              plots=True, animate=False, log=print, out_name="test"):
     from mapf_nco.tb import TB
-    from mapf_nco.viz import animate_comparison, plot_comparison, plot_paths, plot_test_summary
+    from mapf_nco.viz import (animate_comparison, animate_cost_evolution, plot_comparison,
+                              plot_cost_evolution, plot_paths, plot_test_summary)
 
     planner = PrioritizedPlanner(grid, w_min=cfg["w_min"])
     models = load_models(cfg, grid, trained_n, kinds, log)
@@ -93,7 +94,7 @@ def run_test(cfg, grid, trained_n, scenarios, ename, label, kinds=("edge", "gnn"
     fails = {m: 0 for m in methods}
     say = tqdm.write if log is print else log  # print without breaking the progress bar
     for i, sc in enumerate(tqdm(scenarios, desc="test", unit="inst")):
-        plans, t, weights = plan_all_timed(planner, sc, models)
+        plans, t, weights, seq_weights = plan_all_timed(planner, sc, models)
         lb = sc.lower_bound(grid)
         row = {"instance": i, "agents": sc.num_agents, "lower_bound": lb,
                "makespan_lower_bound": int(max(grid.bfs_distances(g)[s]
@@ -118,10 +119,20 @@ def run_test(cfg, grid, trained_n, scenarios, ename, label, kinds=("edge", "gnn"
             titles = {m: f"{names.get(m, m)}: $\\sum_e y_e$ = {sum_of_costs(p)},  "
                          f"delay {sum_of_costs(p) - lb},  makespan {max(len(q) - 1 for q in p)}"
                       for m, p in ok.items()}
+            wt = {k: v + (" (mean over agents)" if k in seq_weights else "")
+                  for k, v in WEIGHT_LABELS.items()}
             comp = plot_comparison(
                 grid, sc, ok, titles, os.path.join(idir, "comparison.png"), REF,
-                weights=weights, weight_titles=WEIGHT_LABELS,
+                weights=weights, weight_titles=wt,
                 header=f"{label}, instance {i}  ||  {header}")
+            for kind, W in seq_weights.items():
+                plot_cost_evolution(grid, sc, W, plans[LABELS[kind]],
+                                    os.path.join(idir, f"cost_evolution_{kind}.png"),
+                                    f"{LABELS[kind]}: costs recomputed before each agent  ||  "
+                                    f"{label}, instance {i}")
+                if animate:
+                    animate_cost_evolution(grid, sc, W, plans[LABELS[kind]],
+                                           os.path.join(idir, f"cost_evolution_{kind}.gif"))
             for m, p in ok.items():
                 fname = (ename.lower() if m == "Expert" else KEY[m]) + ".png"
                 plot_paths(grid, p, sc.starts, sc.goals, titles[m], os.path.join(idir, fname))

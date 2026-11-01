@@ -1,6 +1,5 @@
 import os
 
-import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -66,3 +65,51 @@ def test_train_and_evaluate_smoke(grid, tmp_path):
     rows = evaluate(cfg, [6], ("edge", "gnn"), log=lambda *a: None)
     assert "gnn_delay" in rows[0] and "edge_delay" in rows[0]
     assert "| 6 |" in format_table(rows)
+
+
+def test_sequential_gnn_reads_reservations(grid):
+    """seq_dim > 0: same output as static at start; after training it depends on the reservations."""
+    import numpy as np
+
+    from mapf_nco.sequential import SEQ_DIM
+
+    scs = _scenarios(grid)
+    m = GNNModel(grid, hidden=16, num_freqs=3, id_dim=4, mlp_hidden=16, seq_dim=SEQ_DIM)
+    x0 = np.zeros((3, grid.num_nodes, SEQ_DIM), np.float32)
+    x1 = np.random.default_rng(0).random((3, grid.num_nodes, SEQ_DIM)).astype(np.float32)
+    w0 = m(make_batch(scs, seq=x0))
+    assert torch.allclose(w0, torch.ones_like(w0), atol=1e-6)
+    w = m(make_batch(scs, seq=x1))
+    w.backward(torch.randn_like(w))
+    torch.optim.Adam(m.parameters(), lr=1e-2).step()
+    a, b = m(make_batch(scs, seq=x0)), m(make_batch(scs, seq=x1))
+    assert not torch.allclose(a, b)
+
+
+@pytest.mark.parametrize("method", ["seq_teacher", "seq_blackbox"])
+def test_sequential_training_smoke(grid, tmp_path, method):
+    from mapf_nco.evaluate import test_saved
+    from mapf_nco.scenarios import dataset_path, save_dataset
+    from mapf_nco.solver_cbs import solve_cbs
+    from mapf_nco.train import train
+
+    from conftest import MAP_PATH
+
+    cfg = {
+        "map_path": MAP_PATH, "data_dir": str(tmp_path / "data"),
+        "output_dir": str(tmp_path / "out"), "val_fraction": 0.25, "epochs": 1,
+        "batch_size": 4, "lr": 5e-3, "lam": 1.0, "loss_reduction": "mean", "w_min": 1e-3,
+        "gnn": {"hidden": 16, "num_freqs": 3, "id_dim": 4, "mlp_hidden": 16}, "seed": 0,
+        "method": method,
+    }
+    scs = _scenarios(grid, n=6, k=10)
+    for s in scs:
+        s.expert_paths = solve_cbs(grid, s.starts, s.goals, time_limit=10)
+    save_dataset(dataset_path(cfg["data_dir"], grid.name, 6, "train"), grid, scs[:8])
+    save_dataset(dataset_path(cfg["data_dir"], grid.name, 6, "test"), grid, scs[8:])
+    for kind in ("edge", "gnn"):
+        train(cfg, 6, kind, workers=1, log=lambda *a: None)
+    r = test_saved(cfg, 6, None, ("edge", "gnn"), log=lambda *a: None)
+    assert "gnn_delay" in r
+    out = tmp_path / "out" / grid.name / "n6" / "test" / "instance_000"
+    assert (out / "cost_evolution_gnn.png").exists()

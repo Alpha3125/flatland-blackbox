@@ -1,4 +1,3 @@
-import numpy as np
 import pytest
 
 from mapf_nco.metrics import edge_usage, find_conflicts, optimality_gap

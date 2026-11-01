@@ -306,3 +306,76 @@ def plot_sweep_summary(rows, n, second_n, out_path):
     fig.suptitle(f"Sweep: models trained on {n} agents (lower is better)", fontsize=11)
     fig.tight_layout()
     return _save(fig, out_path, dpi=130)
+
+
+def _evolution_panels(grid, sc, W, paths, picks, axes, norm):
+    import numpy as np
+
+    order = list(sc.order)
+    for ax, k in zip(axes, picks):
+        i = order[k]
+        draw_weights(ax, grid, W[i], norm)
+        for j in order[:k]:  # agents already planned (their reservations)
+            xs, ys = _xy(grid, paths[j])
+            ax.plot(xs, ys, color="black", lw=0.7, alpha=0.6, zorder=3)
+        if paths[i] is not None:
+            xs, ys = _xy(grid, paths[i])
+            ax.plot(xs, ys, color="lime", lw=2.2, zorder=4)
+        (sr, scol), (gr, gc) = grid.cell(sc.starts[i]), grid.cell(sc.goals[i])
+        ax.scatter([scol], [sr], color="lime", marker="o", s=40, edgecolors="black", zorder=5)
+        ax.scatter([gc], [gr], color="lime", marker="*", s=110, edgecolors="black", zorder=5)
+        d = np.abs(np.asarray(W[i]) - np.asarray(W[order[0]])).mean()
+        ax.set_title(f"before agent #{k + 1} (id {i}); mean |w - w_first| {d:.3f}", fontsize=9)
+
+
+def plot_cost_evolution(grid, sc, W, paths, out_path, title, max_panels=8):
+    """How a sequential model's costs change from agent to agent.
+
+    Panels: the cost map used by selected agents in priority order (gradient,
+    blue = cheaper, red = dearer than 1), with the paths already reserved in
+    black and the current agent's path in green. The last panel shows how much
+    each edge's cost varies across all agents (standard deviation).
+    """
+    import numpy as np
+    from matplotlib.colors import Normalize
+
+    n = len(sc.order)
+    picks = sorted(set(np.linspace(0, n - 1, min(max_panels - 1, n)).round().astype(int)))
+    cols = 4
+    rows = int(np.ceil((len(picks) + 1) / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(4.4 * cols, 4.6 * rows + 0.5), squeeze=False)
+    flat = list(axes.flat)
+    norm = weight_norm([W[i] for i in sc.order])
+    _evolution_panels(grid, sc, W, paths, picks, flat, norm)
+    std = np.std(np.stack(W), axis=0)
+    ax = flat[len(picks)]
+    vals = draw_weights(ax, grid, std, Normalize(0, max(float(std.max()), 1e-9)), cmap="viridis")
+    ax.set_title(f"std of each cost across agents (max {vals.max():.3f})", fontsize=9)
+    for a in flat[len(picks) + 1:]:
+        a.axis("off")
+    fig.subplots_adjust(top=0.9, hspace=0.15, wspace=0.05, left=0.02, right=0.9, bottom=0.02)
+    cax = fig.add_axes([0.925, 0.15, 0.012, 0.7])
+    cb = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap="coolwarm"), cax=cax)
+    cb.set_label("edge cost (blue cheaper, red dearer than 1)")
+    fig.suptitle(title + "\nblack: paths already reserved; green: the agent being planned",
+                 fontsize=10)
+    return _save(fig, out_path, dpi=110)
+
+
+def animate_cost_evolution(grid, sc, W, paths, out_path, fps=3):
+    """GIF: the cost map before each agent in priority order."""
+    from matplotlib.animation import FuncAnimation, PillowWriter
+
+    norm = weight_norm([W[i] for i in sc.order])
+    fig, ax = plt.subplots(figsize=(6, 6.3))
+
+    def frame(k):
+        ax.clear()
+        _evolution_panels(grid, sc, W, paths, [k], [ax], norm)
+        return []
+
+    anim = FuncAnimation(fig, frame, frames=len(sc.order), blit=False)
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    anim.save(out_path, writer=PillowWriter(fps=fps))
+    plt.close(fig)
+    return out_path

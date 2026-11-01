@@ -172,19 +172,24 @@ python main.py evaluate   --agents 50 75 100              # paper's Table 1, no 
 
 ```
 data/scenarios/random-32-32-20/n50/
-    train.json.gz, test.json.gz     generated INPUT data: scenarios, PP priority orders, EECBS paths
+    train.json.gz, test.json.gz     generated INPUT data: scenarios, PP priority orders,
+                                    and the EECBS, PP and CBS plans
 outputs/random-32-32-20/n50/
-    checkpoints/edge.pt, gnn.pt     trained models (the epoch with the best validation delay)
-    training/<model>/curves.png     loss graph (loss function in the title) + validation delay
+    checkpoints/edge.pt, gnn.pt     trained models (the epoch with the best validation delay,
+                                    or validation makespan for a makespan objective)
+    training/<model>/curves.png     loss graph (loss function in the title) + validation metric
     training/<model>/history.csv    the numbers behind the graph (also history.json)
     tensorboard/<model>/            TensorBoard logs of training
     tensorboard/test/               comparison maps and summary of the last test
     test/                           emptied and rewritten on every test:
         summary.png                 bar chart: delay of every method on every instance + mean
-        summary.md / summary.csv    Table-1 style numbers (delay, gap vs EECBS, time, PP failures)
-        per_instance.csv            delay per instance and method
-        instance_000/comparison.png PP (orig) | PP (Edge) | PP (GNN) | EECBS side by side
+        summary.md / summary.csv    Table-1 style numbers (delay, gap vs EECBS, makespan, time,
+                                    PP failures)
+        per_instance.csv            delay and makespan per instance and method
+        instance_000/comparison.png header: hyperparameters; top: PP (orig) | PP (Edge) |
+                                    PP (GNN) | EECBS | CBS; bottom: model edge costs
         instance_000/*.png          each method on its own (+ animation.gif with --animate)
+outputs/sweeps/<map>_n50_<date>/    option 5 (sweep): sweep_summary.*, exp_01/ ...
 outputs/results/table1.md           from `main.py evaluate`
 ```
 
@@ -213,6 +218,40 @@ tensorboard --logdir outputs        # then open http://localhost:6006
 - **Gap** = (mean delay − mean EECBS delay) / mean EECBS delay × 100. This reproduces the paper's percentages,
   e.g. 56.20 vs 23.96 → 134.6 %.
 - Agents stay at their goal after arriving. Sum-of-costs counts each agent's final arrival time.
+
+## Sequential cost prediction (Gelato-style extension)
+
+Setting `method` chooses how the costs are predicted:
+
+| method | costs | training |
+|---|---|---|
+| `static` (paper) | one cost map per scenario, predicted before planning | black-box gradient through PP |
+| `seq_blackbox` | **recomputed before each agent** from the reservations of the agents already planned | black-box gradient through the whole sequential PP, per agent |
+| `seq_teacher` | recomputed before each agent (same model) | Gelato-style teacher forcing on partial EECBS plans |
+
+This follows Gelato (graph edit distance via autoregressive neural combinatorial optimisation, ICLR 2026): every
+decision is conditioned on the partial solution built so far. The priority order stays fixed.
+
+- **Inputs:** before agent k plans, the GNN gets 7 extra values per cell describing the reservations of agents
+  1…k−1: how often the cell is reserved, the earliest and latest reserved time, whether an agent is parked there
+  for good, the progress k/n, and the current agent's start and goal (`mapf_nco/sequential.py`). These channels
+  start at zero effect, so a fresh sequential model behaves exactly like original PP.
+- **`seq_blackbox`:** runs sequential PP and perturbs every agent's costs (Eq. 5). It reruns PP with those
+  per-agent costs, and agent k's gradient is −(y_k − y_k′)/λ, back-propagated through the k-th model call.
+- **`seq_teacher`:** for each agent k, the reservations come from EECBS's paths for agents 1…k−1. The model is
+  trained so that agent k's search returns EECBS's path for agent k, using the same loss and black-box gradient on
+  that single step.
+  - EECBS's paths are collision-free with each other, so the target is always reachable. If every step is right,
+    sequential PP reproduces the EECBS plan exactly; this mirrors Gelato's training on partial optimal solutions.
+  - The training log shows the share of steps that already reproduce the expert's path.
+  - The objective setting doesn't change the target; it only affects which epoch is kept.
+- **Edge model:** only the GNN reads the reservations. The Edge model ignores them, so under `seq_*` it is still one
+  cost map, trained with the per-step signals.
+- **Plots:** testing a sequential model adds `cost_evolution_gnn.png` to every instance folder. It shows the cost
+  map before selected agents in priority order, the paths already reserved, the agent being planned, and a final
+  panel of how much each edge's cost varies across agents. With `--animate` it also writes a GIF that steps
+  through every agent.
+- **Comparing the three:** `python main.py sweep --agents 50 --grid method=static,seq_blackbox,seq_teacher`
 
 ## Makespan objective (extension, not in the paper)
 
@@ -282,6 +321,7 @@ mapf_nco/
   models.py             Edge and GraphSAGE models
   compare.py / viz.py    test helpers, pictures, animations, training curves
   sweep.py              option 5: queue of experiments, shared second test set, summary
+  sequential.py         costs recomputed before each agent (seq_blackbox / seq_teacher)
   paths.py / tb.py       output folder layout, TensorBoard logging
   train.py / evaluate.py / experts.py / metrics.py
 scripts/build_eecbs.sh  builds EECBS into third_party/

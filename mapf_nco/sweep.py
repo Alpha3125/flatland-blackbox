@@ -30,7 +30,7 @@ from mapf_nco.grid import Grid
 from mapf_nco.scenarios import load_dataset, save_dataset
 
 # Hyperparameters that can be swept; "gnn_*" map to cfg["gnn"][*].
-SWEEPABLE = ("objective", "makespan_tau", "makespan_weight", "epochs", "batch_size", "lr",
+SWEEPABLE = ("method", "objective", "makespan_tau", "makespan_weight", "epochs", "batch_size", "lr",
              "lam", "loss_reduction", "w_min", "val_fraction", "seed", "gnn_hidden", "gnn_num_freqs", "gnn_id_dim", "gnn_mlp_hidden")
 
 

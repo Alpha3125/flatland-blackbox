@@ -3,7 +3,8 @@
     data/scenarios/<map>/n<N>/{train,test}.json.gz     generated inputs (scenarios + EECBS plans)
     outputs/<map>/n<N>/
         checkpoints/{edge,gnn}.pt                      trained models (best validation epoch)
-        training/{edge,gnn}/                           curves.png, history.csv, history.json
+        training/                                      curves.png (Edge + GNN together),
+                                                       history.csv, history.json
         tensorboard/{edge,gnn,test}/                   TensorBoard logs
         test/                                          comparison plots + tables (replaced on every test)
         test_n<M>/                                     second test set of a sweep
@@ -24,8 +25,8 @@ def checkpoint_path(cfg, map_name, n, kind):
     return os.path.join(run_dir(cfg, map_name, n), "checkpoints", f"{kind}.pt")
 
 
-def training_dir(cfg, map_name, n, kind):
-    return os.path.join(run_dir(cfg, map_name, n), "training", kind)
+def training_dir(cfg, map_name, n):
+    return os.path.join(run_dir(cfg, map_name, n), "training")
 
 
 def tensorboard_dir(cfg, map_name, n, name):

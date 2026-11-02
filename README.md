@@ -177,8 +177,9 @@ data/scenarios/random-32-32-20/n50/
 outputs/random-32-32-20/n50/
     checkpoints/edge.pt, gnn.pt     trained models (the epoch with the best validation delay,
                                     or validation makespan for a makespan objective)
-    training/<model>/curves.png     loss graph (loss function in the title) + validation metric
-    training/<model>/history.csv    the numbers behind the graph (also history.json)
+    training/curves.png             Edge and GNN together: loss (formula in the title) and
+                                    validation metric, with the selected epochs starred
+    training/history.csv            the numbers behind the graph, one row per model and epoch
     tensorboard/<model>/            TensorBoard logs of training
     tensorboard/test/               comparison maps and summary of the last test
     test/                           emptied and rewritten on every test:
@@ -197,7 +198,8 @@ The datasets are `.json.gz`, i.e. gzip-compressed JSON. 500 scenarios × 100 age
 of MB uncompressed. They are inputs, not results, which is why they sit in `data/` rather than `outputs/`.
 Python reads them with `gzip.open`, and 7-Zip can unpack them if you want to look inside.
 
-Training a model again replaces that model's checkpoint, `training/<model>/` and `tensorboard/<model>/`. Testing
+Training a model again replaces that model's checkpoint, its curves and rows in `training/`, and
+`tensorboard/<model>/`. Testing
 again replaces `test/` and `tensorboard/test/`.
 
 ### TensorBoard

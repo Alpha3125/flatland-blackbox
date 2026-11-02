@@ -212,41 +212,55 @@ def loss_title(refs, reduction):
     return "Training loss   " + LOSS_FORMULA.get(reduction, "")
 
 
-def plot_training_curves(history, batch_losses, refs, best_epoch, kind, n, reduction, out_path):
-    """Loss and the validation metric per epoch, with the loss function in the title."""
-    metric = refs.get("metric", "delay")
-    epochs = [h["epoch"] for h in history]
-    loss = [h.get("train_loss") for h in history]
-    val = [h[f"val_{metric}"] for h in history]
-    fig, (a1, a2) = plt.subplots(1, 2, figsize=(12, 4.8))
+MODEL_COLORS = {"edge": ("#4292c6", "#c6dbef"), "gnn": ("#ec7014", "#fdd0a2")}
 
-    if batch_losses:
-        bx, by = zip(*batch_losses)
-        a1.plot(bx, by, color="#9ecae1", lw=0.8, label="per mini-batch")
-    pts = [(e, v) for e, v in zip(epochs, loss) if v is not None]
-    if pts:
-        a1.plot(*zip(*pts), "o-", color="#08519c", lw=2, label="epoch mean")
+
+def plot_training_curves(runs, n, out_path):
+    """Edge and GNN training together: loss (left) and the validation metric (right).
+
+    ``runs``: {kind: {history, batch_losses, refs, best_epoch, reduction}}.
+    """
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(13, 5))
+    titles, ref_drawn = [], set()
+    for kind, r in runs.items():
+        dark, light = MODEL_COLORS.get(kind, ("black", "gray"))
+        refs, history = r["refs"], r["history"]
+        metric = refs.get("metric", "delay")
+        epochs = [h["epoch"] for h in history]
+        if r.get("batch_losses"):
+            bx, by = zip(*r["batch_losses"])
+            a1.plot(bx, by, color=light, lw=0.8)
+        pts = [(h["epoch"], h.get("train_loss")) for h in history if h.get("train_loss") is not None]
+        if pts:
+            a1.plot(*zip(*pts), "o-", color=dark, lw=2, label=f"{kind}: epoch mean (light: batches)")
+        val = [h[f"val_{metric}"] for h in history]
+        a2.plot(epochs, val, "o-", color=dark, lw=2, label=f"PP ({kind})")
+        be = r["best_epoch"]
+        a2.scatter([be], [val[epochs.index(be)]], s=170, marker="*", color="gold",
+                   edgecolors=dark, linewidths=1.5, zorder=5, label=f"{kind} selected (epoch {be})")
+        key = (metric, round(refs["orig_pp"], 6), round(refs["expert"], 6))
+        if key not in ref_drawn:
+            ref_drawn.add(key)
+            a2.axhline(refs["orig_pp"], color="gray", ls="--",
+                       label=f"original PP ({refs['orig_pp']:.2f})")
+            a2.axhline(refs["expert"], color="green", ls=":",
+                       label=f"{refs.get('expert_name', 'EECBS')} ({refs['expert']:.2f})")
+        titles.append(f"{kind}: method {refs.get('method', 'static')}, objective "
+                      f"{refs.get('objective', 'usage')}")
+    first = next(iter(runs.values()))
+    metric = first["refs"].get("metric", "delay")
     a1.set_xlabel("epoch")
     a1.set_ylabel("loss")
-    a1.set_title(loss_title(refs, reduction), fontsize=10)
+    a1.set_title(loss_title(first["refs"], first.get("reduction", "mean")), fontsize=10)
     a1.grid(alpha=0.3)
     a1.legend(fontsize=8)
-
-    a2.plot(epochs, val, "o-", color="#d94801", lw=2, label=f"PP ({kind})")
-    a2.axhline(refs["orig_pp"], color="gray", ls="--", label=f"original PP ({refs['orig_pp']:.2f})")
-    a2.axhline(refs["expert"], color="green", ls=":",
-               label=f"{refs.get('expert_name', 'EECBS')} ({refs['expert']:.2f})")
-    a2.scatter([best_epoch], [val[epochs.index(best_epoch)]], s=160, marker="*", color="gold",
-               edgecolors="black", zorder=5, label=f"selected (epoch {best_epoch})")
     a2.set_xlabel("epoch")
     a2.set_ylabel(r"validation delay  ($\sum_e y_e$ $-$ lower bound)" if metric == "delay"
                   else "validation makespan (max arrival time)")
     a2.set_title(f"Validation {metric} (lower is better)", fontsize=11)
     a2.grid(alpha=0.3)
     a2.legend(fontsize=8)
-    fig.suptitle(f"{kind} model, {n} agents, method: {refs.get('method', 'static')}, "
-                 f"objective: {refs.get('objective', 'usage')}",
-                 fontsize=12)
+    fig.suptitle(f"{n} agents  |  " + "  |  ".join(titles), fontsize=11)
     fig.tight_layout()
     return _save(fig, out_path, dpi=130)
 

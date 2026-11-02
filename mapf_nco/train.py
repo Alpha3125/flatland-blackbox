@@ -32,7 +32,7 @@ from mapf_nco.grid import Grid
 from mapf_nco.models import build_model, make_batch
 from mapf_nco.scenarios import dataset_path, load_dataset, train_val_split
 from mapf_nco.metrics import edge_usage
-from mapf_nco.paths import checkpoint_path, fresh_dir, tensorboard_dir, training_dir
+from mapf_nco.paths import checkpoint_path, tensorboard_dir, training_dir
 from mapf_nco.sequential import METHODS, SEQ_DIM, model_spec, seq_plan_task, seq_train_task
 from mapf_nco.solver_pp import NoSolutionError, PrioritizedPlanner
 from mapf_nco.tb import TB
@@ -216,7 +216,8 @@ def train(cfg, n, kind, workers=1, log=print):
 
     ckpt = checkpoint_path(cfg, grid.name, n, kind)
     os.makedirs(os.path.dirname(ckpt), exist_ok=True)
-    tdir = fresh_dir(training_dir(cfg, grid.name, n, kind))
+    tdir = training_dir(cfg, grid.name, n)
+    os.makedirs(tdir, exist_ok=True)
     tb = TB(tensorboard_dir(cfg, grid.name, n, kind), log)
     tb.text("config", "\n".join(f"    {k}: {v}" for k, v in sorted(cfg.items())))
 
@@ -336,9 +337,10 @@ def train(cfg, n, kind, workers=1, log=print):
     finally:
         runner.close()
 
-    curves = plot_training_curves(history, batch_losses, refs, best_epoch, kind, n, reduction,
-                                  os.path.join(tdir, "curves.png"))
-    _write_history(history, tdir)
+    runs = _update_runs(tdir, kind, {"history": history, "batch_losses": batch_losses,
+                                     "refs": refs, "best_epoch": best_epoch,
+                                     "reduction": reduction})
+    curves = plot_training_curves(runs, n, os.path.join(tdir, "curves.png"))
     tb.image_file("curves", curves)
     tb.close()
 
@@ -370,15 +372,35 @@ def _log_epoch(tb, model, kind, h, refs):
         tb.histogram("weights/edge_costs", model.edge_weights.detach().cpu().numpy(), e)
 
 
-def _write_history(history, out_dir):
-    with open(os.path.join(out_dir, "history.json"), "w") as f:
-        json.dump(history, f, indent=1)
-    keys = ["epoch", "train_loss", "val_delay", "val_makespan", "val_failures", "train_pp_failures",
-            "zero_grad_scenarios", "seconds"]
+def _update_runs(out_dir, kind, run):
+    """Store this model's run next to the other model's; rewrite the shared files.
+
+    history.json holds every model's run (used to redraw the combined plot);
+    history.csv has one row per (model, epoch). Retraining a model replaces only
+    that model's entries.
+    """
+    path = os.path.join(out_dir, "history.json")
+    runs = {}
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                runs = json.load(f)
+            if not isinstance(runs, dict) or any(not isinstance(v, dict) for v in runs.values()):
+                runs = {}  # old per-model format
+        except (OSError, ValueError):
+            runs = {}
+    runs[kind] = run
+    runs = {k: runs[k] for k in ("edge", "gnn") if k in runs}
+    with open(path, "w") as f:
+        json.dump(runs, f, indent=1)
+    keys = ["model", "epoch", "train_loss", "val_delay", "val_makespan", "val_failures",
+            "train_pp_failures", "zero_grad_scenarios", "teacher_exact_steps", "seconds"]
     with open(os.path.join(out_dir, "history.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore")
         w.writeheader()
-        w.writerows(history)
+        for k, r in runs.items():
+            w.writerows({"model": k, **h} for h in r["history"])
+    return runs
 
 
 def save_checkpoint(path, model, kind, model_kwargs, n, grid, epoch, val_delay, cfg,

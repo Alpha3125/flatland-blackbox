@@ -207,15 +207,12 @@ def menu_experiment(cfg, n, info):
         print("  No training data yet: generate first (option 1).")
         return
     cfg = ask_hyperparameters(cfg)
-    results = {}
     for kind in ("edge", "gnn"):
         print()
         train(cfg, n, kind, workers=cfg["workers"], log=print)
-        results[kind] = os.path.join(training_dir(cfg, info["grid"].name, n, kind), "curves.png")
-    print("\nExperiment finished. Loss graphs:")
-    for kind, path in results.items():
-        print(f"  {kind}: {path}")
-        open_file(path)
+    curves = os.path.join(training_dir(cfg, info["grid"].name, n), "curves.png")
+    print(f"\nExperiment finished. Loss graph (Edge + GNN): {curves}")
+    open_file(curves)
     print("Use option 3 to test the models.")
 
 
@@ -231,14 +228,15 @@ def menu_test(cfg, n, info):
         if not info["test"]:
             print("  No saved test scenarios: generate first (option 1).")
             return
-        k = ask(f"  How many test instances (1-{info['test']}; more = steadier average)", 1, int,
+        k = ask(f"  How many test instances (1-{info['test']}; more = steadier average)",
+                min(3, info["test"]), int,
                 list(range(1, info["test"] + 1)))
         animate = ask_yes("  Also save animations (GIF, slower)?", False)
         test_saved(cfg, n, k, plots=True, animate=animate)
     else:
         cfg = dict(cfg)
         agents = ask(f"  Number of agents (models were trained on {n})", n, int)
-        count = ask("  How many random scenarios (more = steadier average)", 1, int)
+        count = ask("  How many random scenarios (more = steadier average)", 3, int)
         seed = ask("  Random seed", 12345, int)
         cfg["with_cbs"] = ask_yes("  Also solve with optimal CBS?", cfg.get("with_cbs", True))
         animate = ask_yes("  Also save animations (GIF, slower)?", False)
@@ -317,7 +315,7 @@ def menu_sweep(cfg, n, info):
         return
     k = len(expand_grid(grid_values))
     test_count = ask("  Test scenarios per experiment (from the saved test set)",
-                     info["test"] or cfg["num_test"], int)
+                     min(3, info["test"] or cfg["num_test"]), int)
     second_n = second_count = None
     if ask_yes("  Also test on a second set with a different number of agents?", False):
         second_n = ask("  Agents in the second test set", second_agent_count(n, cfg), int)

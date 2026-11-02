@@ -221,7 +221,8 @@ tensorboard --logdir outputs        # then open http://localhost:6006
 
 ## Sequential cost prediction (Gelato-style extension)
 
-Setting `method` chooses how the costs are predicted:
+Setting `method` chooses how the costs are predicted (default: `seq_teacher`; choose `static` to reproduce the
+paper):
 
 | method | costs | training |
 |---|---|---|

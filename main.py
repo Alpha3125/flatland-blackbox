@@ -231,14 +231,14 @@ def menu_test(cfg, n, info):
         if not info["test"]:
             print("  No saved test scenarios: generate first (option 1).")
             return
-        k = ask(f"  How many test instances (1-{info['test']})", info["test"], int,
+        k = ask(f"  How many test instances (1-{info['test']}; more = steadier average)", 1, int,
                 list(range(1, info["test"] + 1)))
         animate = ask_yes("  Also save animations (GIF, slower)?", False)
         test_saved(cfg, n, k, plots=True, animate=animate)
     else:
         cfg = dict(cfg)
         agents = ask(f"  Number of agents (models were trained on {n})", n, int)
-        count = ask("  How many random scenarios", 25, int)
+        count = ask("  How many random scenarios (more = steadier average)", 1, int)
         seed = ask("  Random seed", 12345, int)
         cfg["with_cbs"] = ask_yes("  Also solve with optimal CBS?", cfg.get("with_cbs", True))
         animate = ask_yes("  Also save animations (GIF, slower)?", False)

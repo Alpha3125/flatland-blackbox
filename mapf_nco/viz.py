@@ -244,7 +244,8 @@ def plot_training_curves(history, batch_losses, refs, best_epoch, kind, n, reduc
     a2.set_title(f"Validation {metric} (lower is better)", fontsize=11)
     a2.grid(alpha=0.3)
     a2.legend(fontsize=8)
-    fig.suptitle(f"{kind} model, {n} agents, objective: {refs.get('objective', 'usage')}",
+    fig.suptitle(f"{kind} model, {n} agents, method: {refs.get('method', 'static')}, "
+                 f"objective: {refs.get('objective', 'usage')}",
                  fontsize=12)
     fig.tight_layout()
     return _save(fig, out_path, dpi=130)

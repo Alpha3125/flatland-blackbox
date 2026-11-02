@@ -24,7 +24,7 @@ city generators, flowtime) has been replaced by the grid MAPF setting the paper 
 | Algorithm 1, Adam (lr 5e-4), λ = 1.0, validation-delay checkpointing | `mapf_nco/train.py` |
 | §4 EECBS experts (suboptimality 1.0 for 50 agents, 1.05 for 75/100) | `mapf_nco/solver_eecbs.py`, `mapf_nco/experts.py` |
 | §4 priority order: ascending true distance, otherwise one fixed random permutation | `mapf_nco/scenarios.py` → `assign_priority_order` |
-| §4 random-32-32-20 map, 500 train scenarios (20 % for validation), 25 test scenarios | `configs/paper.json` |
+| §4 random-32-32-20 map, 500 train scenarios (20 % for validation), 25 test scenarios (default here: 100, for steadier averages; enter 25 to match the paper exactly) | `configs/paper.json` |
 | Table 1: average delay and optimality gap relative to EECBS | `mapf_nco/evaluate.py` |
 
 ## Installation
@@ -285,7 +285,8 @@ These are documented so they can be changed if the authors clarify them:
 - **Directed costs.** The loss compares *directed* edge-usage vectors and Eq. 5 adds ∂L/∂ŷ to *w*, so *w* and *y*
   have to share one index space. Every directed move u→v and every wait self-loop v→v therefore has its own cost
   (M = 3,359 for random-32-32-20).
-- **Epochs and batch size** are not reported. The defaults are 30 epochs and B = 8. Model selection on validation
+- **Epochs and batch size** are not reported. The defaults are 20 epochs (validation delay levelled off by
+  about epoch 15 in our runs) and B = 8. Model selection on validation
   delay makes the epoch count less critical.
 - **Scenarios** are uniformly random, distinct start and goal cells in the largest connected component. MovingAI
   provides only 25 `.scen` files per map, so the 525 scenarios are sampled. `read_scen` can load the official

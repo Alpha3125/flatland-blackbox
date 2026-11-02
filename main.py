@@ -238,7 +238,7 @@ def menu_test(cfg, n, info):
     else:
         cfg = dict(cfg)
         agents = ask(f"  Number of agents (models were trained on {n})", n, int)
-        count = ask("  How many random scenarios", 5, int)
+        count = ask("  How many random scenarios", 25, int)
         seed = ask("  Random seed", 12345, int)
         cfg["with_cbs"] = ask_yes("  Also solve with optimal CBS?", cfg.get("with_cbs", True))
         animate = ask_yes("  Also save animations (GIF, slower)?", False)

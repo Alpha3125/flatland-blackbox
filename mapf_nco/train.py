@@ -231,7 +231,8 @@ def train(cfg, n, kind, workers=1, log=print):
                 "orig_pp": float(base_delays.mean() if metric == "delay" else base_spans.mean()),
                 "expert": float(np.mean([s.expert_delay(grid) for s in val_set])
                                 if metric == "delay" else np.mean(expert_spans)),
-                "objective": objective, "tau": obj["tau"], "beta": obj["beta"]}
+                "objective": objective, "tau": obj["tau"], "beta": obj["beta"],
+                "method": method}
 
         def validate():
             if method == "static":

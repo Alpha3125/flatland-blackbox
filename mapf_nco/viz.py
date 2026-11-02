@@ -212,18 +212,23 @@ def loss_title(refs, reduction):
     return "Training loss   " + LOSS_FORMULA.get(reduction, "")
 
 
-MODEL_COLORS = {"edge": ("#4292c6", "#c6dbef"), "gnn": ("#ec7014", "#fdd0a2")}
+MODEL_COLORS = {"edge": ("#4292c6", "#c6dbef"), "gnn": ("#ec7014", "#fdd0a2"),
+                "edge_cbs": ("#238b45", "#c7e9c0"), "gnn_cbs": ("#88419d", "#dadaeb")}
+RUN_LABELS = {"edge": "PP (Edge)", "gnn": "PP (GNN)", "edge_cbs": "CBS (Edge)",
+              "gnn_cbs": "CBS (GNN)"}
 
 
 def plot_training_curves(runs, n, out_path):
-    """Edge and GNN training together: loss (left) and the validation metric (right).
+    """All models' training together: loss (left) and the validation metric (right).
 
-    ``runs``: {kind: {history, batch_losses, refs, best_epoch, reduction}}.
+    ``runs``: {model id: {history, batch_losses, refs, best_epoch, reduction}}, model
+    ids edge / gnn (PP) and edge_cbs / gnn_cbs (CBS).
     """
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(13, 5))
     titles, ref_drawn = [], set()
     for kind, r in runs.items():
         dark, light = MODEL_COLORS.get(kind, ("black", "gray"))
+        name = RUN_LABELS.get(kind, kind)
         refs, history = r["refs"], r["history"]
         metric = refs.get("metric", "delay")
         epochs = [h["epoch"] for h in history]
@@ -232,21 +237,24 @@ def plot_training_curves(runs, n, out_path):
             a1.plot(bx, by, color=light, lw=0.8)
         pts = [(h["epoch"], h.get("train_loss")) for h in history if h.get("train_loss") is not None]
         if pts:
-            a1.plot(*zip(*pts), "o-", color=dark, lw=2, label=f"{kind}: epoch mean (light: batches)")
+            a1.plot(*zip(*pts), "o-", color=dark, lw=2, label=f"{name}: epoch mean (light: batches)")
         val = [h[f"val_{metric}"] for h in history]
-        a2.plot(epochs, val, "o-", color=dark, lw=2, label=f"PP ({kind})")
+        a2.plot(epochs, val, "o-", color=dark, lw=2, label=name)
         be = r["best_epoch"]
         a2.scatter([be], [val[epochs.index(be)]], s=170, marker="*", color="gold",
-                   edgecolors=dark, linewidths=1.5, zorder=5, label=f"{kind} selected (epoch {be})")
-        key = (metric, round(refs["orig_pp"], 6), round(refs["expert"], 6))
+                   edgecolors=dark, linewidths=1.5, zorder=5, label=f"{name} selected (epoch {be})")
+        pl = refs.get("planner", "pp")
+        key = (metric, pl, round(refs["orig_pp"], 6))
         if key not in ref_drawn:
             ref_drawn.add(key)
-            a2.axhline(refs["orig_pp"], color="gray", ls="--",
-                       label=f"original PP ({refs['orig_pp']:.2f})")
+            a2.axhline(refs["orig_pp"], color="gray" if pl == "pp" else "#6a51a3", ls="--",
+                       label=f"original {pl.upper()} ({refs['orig_pp']:.2f})")
+        ekey = (metric, "expert", round(refs["expert"], 6))
+        if ekey not in ref_drawn:
+            ref_drawn.add(ekey)
             a2.axhline(refs["expert"], color="green", ls=":",
                        label=f"{refs.get('expert_name', 'EECBS')} ({refs['expert']:.2f})")
-        titles.append(f"{kind}: method {refs.get('method', 'static')}, objective "
-                      f"{refs.get('objective', 'usage')}")
+        titles.append(f"{name}: method {refs.get('method', 'static')}")
     first = next(iter(runs.values()))
     metric = first["refs"].get("metric", "delay")
     a1.set_xlabel("epoch")
@@ -260,12 +268,14 @@ def plot_training_curves(runs, n, out_path):
     a2.set_title(f"Validation {metric} (lower is better)", fontsize=11)
     a2.grid(alpha=0.3)
     a2.legend(fontsize=8)
-    fig.suptitle(f"{n} agents  |  " + "  |  ".join(titles), fontsize=11)
+    obj = first["refs"].get("objective", "usage")
+    fig.suptitle(f"{n} agents, objective {obj}  |  " + "  |  ".join(titles), fontsize=10)
     fig.tight_layout()
     return _save(fig, out_path, dpi=130)
 
 
 METHOD_COLORS = {"PP (orig)": "#969696", "PP (Edge)": "#4292c6", "PP (GNN)": "#ec7014",
+                 "CBS (Edge)": "#238b45", "CBS (GNN)": "#88419d",
                  "Expert": "#41ab5d", "CBS": "#6a51a3"}
 
 
@@ -305,11 +315,17 @@ def plot_sweep_summary(rows, tags, out_path):
     fig, axes = plt.subplots(1, len(tags), figsize=(max(7, 1.1 * len(rows) + 4) * len(tags) / 1.4,
                                                     4.6), squeeze=False)
     for ax, tag in zip(axes[0], tags):
-        ax.bar(x - 0.2, [r[f"{tag}_edge_delay"] for r in rows], 0.4, label="PP (Edge)",
-               color=METHOD_COLORS["PP (Edge)"])
-        ax.bar(x + 0.2, [r[f"{tag}_gnn_delay"] for r in rows], 0.4, label="PP (GNN)",
-               color=METHOD_COLORS["PP (GNN)"])
+        ids = [m for m in RUN_LABELS
+               if any(np.isfinite(r.get(f"{tag}_{m}_delay", float("nan"))) for r in rows)]
+        width = 0.8 / max(1, len(ids))
+        for j, m in enumerate(ids):
+            ax.bar(x + (j - (len(ids) - 1) / 2) * width,
+                   [r.get(f"{tag}_{m}_delay", float("nan")) for r in rows], width,
+                   label=RUN_LABELS[m], color=METHOD_COLORS[RUN_LABELS[m]])
         ax.axhline(rows[0][f"{tag}_orig_delay"], color="gray", ls="--", label="original PP")
+        cbs = rows[0].get(f"{tag}_cbs_delay", float("nan"))
+        if np.isfinite(cbs):
+            ax.axhline(cbs, color="#6a51a3", ls="-.", label="original CBS")
         ax.axhline(rows[0][f"{tag}_expert_delay"], color="green", ls=":", label="EECBS")
         ax.set_xticks(x)
         ax.set_xticklabels(names)

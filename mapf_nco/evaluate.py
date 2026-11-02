@@ -13,7 +13,8 @@ Every test empties and rewrites ``outputs/<map>/n<N>/test/``:
     summary.md / summary.csv      Table-1 style: mean delay, gap vs EECBS, time, failures
     per_instance.csv              delay of every method on every instance
     summary.png                   bar chart of delays per instance (+ mean)
-    instance_000/comparison.png   top: PP (orig) | PP (Edge) | PP (GNN) | EECBS | CBS
+    instance_000/comparison.png   top: PP (orig) | PP (Edge) | PP (GNN) | [CBS (Edge) |
+                                  CBS (GNN)] | EECBS | CBS
                                   bottom: the edge costs each model assigns (gradient)
                                   header: the training hyperparameters
     instance_000/*.png            each method on its own (and animation.gif if asked)
@@ -31,19 +32,21 @@ import os
 import numpy as np
 from tqdm import tqdm
 
-from mapf_nco.compare import LABELS, REF, WEIGHT_LABELS, hparams_header, load_models, \
-    plan_all_timed
+from mapf_nco.compare import LABELS, MODEL_IDS, REF, WEIGHT_LABELS, hparams_header, \
+    load_models, plan_all_timed
 from mapf_nco.grid import Grid
 from mapf_nco.metrics import optimality_gap, sum_of_costs
 from mapf_nco.paths import fresh_dir, tensorboard_dir, test_dir
 from mapf_nco.scenarios import dataset_path, load_dataset
+from mapf_nco.solver_cbs import WeightedCBS
 from mapf_nco.solver_pp import PrioritizedPlanner
 
-METHODS = ("orig", "edge", "gnn", "cbs")
-KEY = {REF: "orig", "PP (Edge)": "edge", "PP (GNN)": "gnn", "CBS": "cbs"}
+KEY = {REF: "orig", "CBS": "cbs", **{v: k for k, v in LABELS.items()}}
+COLS = ("orig", "edge", "gnn", "edge_cbs", "gnn_cbs")  # table columns besides expert / CBS
+NAMES = {"orig": "PP (orig)", **LABELS}
 
 
-def test_saved(cfg, n, num_instances=None, kinds=("edge", "gnn"), plots=True, animate=False,
+def test_saved(cfg, n, num_instances=None, kinds=MODEL_IDS, plots=True, animate=False,
                log=print):
     """Test the models trained on ``n`` agents on the generated test scenarios."""
     grid = Grid.from_file(cfg["map_path"])
@@ -54,7 +57,7 @@ def test_saved(cfg, n, num_instances=None, kinds=("edge", "gnn"), plots=True, an
                     kinds, plots, animate, log)
 
 
-def test_random(cfg, trained_n, num_agents, count, seed=12345, kinds=("edge", "gnn"),
+def test_random(cfg, trained_n, num_agents, count, seed=12345, kinds=MODEL_IDS,
                 plots=True, animate=False, workers=None, log=print):
     """Test the models trained on ``trained_n`` agents on new random scenarios."""
     from mapf_nco.experts import expert_options, make_scenarios, suboptimality_for
@@ -73,18 +76,19 @@ def test_random(cfg, trained_n, num_agents, count, seed=12345, kinds=("edge", "g
                     kinds, plots, animate, log)
 
 
-def run_test(cfg, grid, trained_n, scenarios, ename, label, kinds=("edge", "gnn"),
+def run_test(cfg, grid, trained_n, scenarios, ename, label, kinds=MODEL_IDS,
              plots=True, animate=False, log=print, out_name="test"):
     from mapf_nco.tb import TB
     from mapf_nco.viz import (animate_comparison, animate_cost_evolution, plot_comparison,
                               plot_cost_evolution, plot_paths, plot_test_summary)
 
     planner = PrioritizedPlanner(grid, w_min=cfg["w_min"])
+    cbs = WeightedCBS(grid, w_min=cfg["w_min"], time_limit=float(cfg.get("cbs_time_limit", 60)))
     models = load_models(cfg, grid, trained_n, kinds, log)
     header = hparams_header(models, trained_n)
     out = fresh_dir(test_dir(cfg, grid.name, trained_n, out_name))
     tb = TB(tensorboard_dir(cfg, grid.name, trained_n, out_name), log) if plots else None
-    has_cbs = any(s.cbs_paths for s in scenarios)
+    has_cbs = any(s.cbs_paths for s in scenarios) or any(k.endswith("_cbs") for k in models)
     methods = [REF] + [LABELS[m] for m in models] + ["Expert"] + (["CBS"] if has_cbs else [])
     names = {m: (ename if m == "Expert" else m) for m in methods}
     log(f"[test] {label}; methods: " + ", ".join(names.values()))
@@ -94,16 +98,19 @@ def run_test(cfg, grid, trained_n, scenarios, ename, label, kinds=("edge", "gnn"
     fails = {m: 0 for m in methods}
     say = tqdm.write if log is print else log  # print without breaking the progress bar
     for i, sc in enumerate(tqdm(scenarios, desc="test", unit="inst")):
-        plans, t, weights, seq_weights = plan_all_timed(planner, sc, models)
+        plans, t, weights, seq_weights = plan_all_timed(planner, sc, models, cbs)
         lb = sc.lower_bound(grid)
         row = {"instance": i, "agents": sc.num_agents, "lower_bound": lb,
                "makespan_lower_bound": int(max(grid.bfs_distances(g)[s]
                                                for s, g in zip(sc.starts, sc.goals)))}
         for m in methods:
             paths = plans.get(m)
-            if paths is None and m in KEY and m != "CBS":
-                fails[m] += 1  # learned weights made PP fail: fall back to original PP
-                paths = plans[REF]
+            if paths is None and m in KEY and m not in ("CBS", REF):
+                # learned costs made the planner fail (PP: no path, CBS: time limit):
+                # fall back to the original plan of the same planner
+                fails[m] += 1
+                paths = (plans.get("CBS") or plans.get("Expert") if m.startswith("CBS")
+                         else plans[REF])
             row[m] = None if paths is None else sum_of_costs(paths) - lb
             row[f"{m} makespan"] = None if paths is None else max(len(p) - 1 for p in paths)
             if m in t:
@@ -181,6 +188,8 @@ def _aggregate(n, per_instance, methods, times, fails):
         row[f"{key}_makespan"] = float(np.mean(spans)) if spans else float("nan")
         if key == "cbs":
             row["cbs_solved"] = len(vals)
+            if times.get(m):
+                row["cbs_time"] = float(np.mean(times[m]))
             continue
         row[f"{key}_time"] = float(np.mean(times[m])) if times[m] else float("nan")
         if key != "orig":
@@ -188,25 +197,20 @@ def _aggregate(n, per_instance, methods, times, fails):
     return row
 
 
-def evaluate(cfg, agent_counts, models=("edge", "gnn"), log=print):
+def evaluate(cfg, agent_counts, models=MODEL_IDS, log=print):
     """Table-1 numbers for several agent counts (all saved test scenarios, no plots)."""
     return [test_saved(cfg, n, None, models, plots=False, log=log) for n in agent_counts]
 
 
 def format_table(rows):
-    """Markdown table in the layout of the paper's Table 1 (+ optimal CBS)."""
+    """Markdown table in the layout of the paper's Table 1 (+ CBS and the CBS models)."""
     ename = rows[0].get("expert_name", "EECBS") if rows else "EECBS"
-    lines = [
-        f"| Agents | PP (orig) | PP (Edge) | PP (GNN) | {ename} | CBS (optimal) |",
-        "|---:|---:|---:|---:|---:|---:|",
-    ]
+    cols = [m for m in COLS if any(f"{m}_delay" in r for r in rows)] or ["orig"]
+    head = [NAMES[m] for m in cols] + [ename, "CBS (optimal)"]
+    lines = ["| Agents | " + " | ".join(head) + " |", "|---:|" + "---:|" * len(head)]
     for r in rows:
-        cells = []
-        for m in ("orig", "edge", "gnn"):
-            if f"{m}_delay" in r:
-                cells.append(f"{r[f'{m}_delay']:.2f} ({r[f'{m}_gap']:.1f}%)")
-            else:
-                cells.append("—")
+        cells = [f"{r[f'{m}_delay']:.2f} ({r[f'{m}_gap']:.1f}%)" if f"{m}_delay" in r else "—"
+                 for m in cols]
         cbs = "—"
         if r.get("cbs_solved"):
             cbs = f"{r['cbs_delay']:.2f}"
@@ -218,11 +222,13 @@ def format_table(rows):
     lines.append(f"Average delay (% optimality gap relative to {ename}) over "
                  f"{', '.join(str(r['num_test']) for r in rows)} instance(s). Lower is better. "
                  "CBS is averaged over the instances it solved within its time limit.")
-    lines += ["", f"| Agents | PP (orig) | PP (Edge) | PP (GNN) | {ename} | CBS (optimal) | "
-                  "lower bound |", "|---:|---:|---:|---:|---:|---:|---:|"]
+    if any(c.endswith("_cbs") for c in cols):
+        lines.append("CBS (Edge) / CBS (GNN) = CBS with the learned costs; a run that hits the "
+                     "time limit falls back to the original CBS plan and counts as a failure.")
+    lines += ["", "| Agents | " + " | ".join(head) + " | lower bound |",
+              "|---:|" + "---:|" * (len(head) + 1)]
     for r in rows:
-        cells = [f"{r[f'{m}_makespan']:.2f}" if f"{m}_makespan" in r else "—"
-                 for m in ("orig", "edge", "gnn")]
+        cells = [f"{r[f'{m}_makespan']:.2f}" if f"{m}_makespan" in r else "—" for m in cols]
         cbs = f"{r['cbs_makespan']:.2f}" if r.get("cbs_solved") else "—"
         lines.append(f"| {r['agents']} | " + " | ".join(cells)
                      + f" | {r.get('expert_makespan', float('nan')):.2f} | {cbs} | "
@@ -232,12 +238,15 @@ def format_table(rows):
               "minimise the sum of costs, not the makespan."]
     timing = []
     for r in rows:
-        parts = [f"{m}: {r[f'{m}_time'] * 1000:.1f} ms" for m in ("orig", "edge", "gnn")
+        parts = [f"{NAMES[m]}: {r[f'{m}_time'] * 1000:.1f} ms" for m in cols
                  if f"{m}_time" in r]
-        failures = [f"{m} PP failures: {r[f'{m}_failures']}" for m in ("edge", "gnn")
+        if "cbs_time" in r:
+            parts.append(f"CBS (orig): {r['cbs_time'] * 1000:.1f} ms")
+        failures = [f"{NAMES[m]} failures: {r[f'{m}_failures']}" for m in cols
                     if r.get(f"{m}_failures")]
         timing.append(f"- n={r['agents']}: " + ", ".join(parts + failures))
-    return "\n".join(lines + ["", "Mean time per instance (model inference + PP):"] + timing)
+    return "\n".join(lines + ["", "Mean time per instance (model inference + planner):"]
+                     + timing)
 
 
 def _per_instance_md(per_instance, methods, names):

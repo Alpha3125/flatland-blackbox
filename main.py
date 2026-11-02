@@ -6,13 +6,14 @@ Run without arguments for the interactive menu:
     python main.py                              (uses configs/paper.json)
 
     1) Generate  scenarios with pre-computed EECBS (expert), CBS (optimal) and PP plans
-    2) Experiment  train both the Edge and the GNN model (asks every hyperparameter)
+    2) Experiment  train the Edge and the GNN model for PP, CBS or both (asks every hyperparameter)
     3) Test  on the saved test scenarios, or on new random ones with any number of agents
 
 Or use the commands directly:
 
     python main.py generate   --agents 50
     python main.py experiment --agents 50 --epochs 30 --lr 5e-4 --lam 1.0
+    python main.py experiment --agents 20 --planner cbs                   CBS models only
     python main.py test       --agents 50 --num 10                       saved test scenarios
     python main.py test       --agents 50 --random 5 --test_agents 75     new random scenarios
     python main.py sweep      --agents 50 --grid lr=1e-4,5e-4 lam=0.5,1   4 experiments
@@ -113,10 +114,13 @@ def status(cfg, n):
             info[split] = 0
             info[f"{split}_missing"] = False
             print(f"  {split:5s} data : not generated yet")
-    for kind in ("edge", "gnn"):
-        ck = checkpoint_path(cfg, grid.name, n, kind)
-        info[kind] = os.path.exists(ck)
-        print(f"  {kind:5s} model: {'trained  ' + ck if info[kind] else 'not trained yet'}")
+    from mapf_nco.planners import LABELS, MODEL_IDS
+
+    for mid in MODEL_IDS:
+        ck = checkpoint_path(cfg, grid.name, n, mid)
+        info[mid] = os.path.exists(ck)
+        print(f"  {LABELS[mid]:10s} model: {'trained  ' + ck if info[mid] else 'not trained yet'}")
+    info["any_model"] = any(info[m] for m in MODEL_IDS)
     print(f"  outputs    : {run_dir(cfg, grid.name, n)}")
     return info
 
@@ -162,12 +166,20 @@ def ask_hyperparameters(cfg):
     """Every training setting, with the config values as defaults."""
     cfg = dict(cfg)
     g = dict(cfg.get("gnn", {}))
-    print("  Training (both models)  [Enter keeps the default]")
+    print("  Training  [Enter keeps the default]")
+    print("    planner: pp   = learn edge costs for Prioritized Planning (the paper)")
+    print("             cbs  = learn edge costs for CBS (optimal; slow for many agents)")
+    print("             both = train an Edge and a GNN model for each (4 models)")
+    cfg["planner"] = ask("    planner", cfg.get("planner", "both"), str, ["pp", "cbs", "both"])
+    if cfg["planner"] != "pp":
+        cfg["cbs_train_time_limit"] = ask("    CBS time limit per call during training, seconds",
+                                          cfg.get("cbs_train_time_limit", 10), float)
     cfg["epochs"] = ask("    epochs", cfg["epochs"], int)
     cfg["batch_size"] = ask("    batch size (scenarios per update)", cfg["batch_size"], int)
     cfg["lr"] = ask("    learning rate (Adam)", cfg["lr"], float)
     cfg["lam"] = ask("    lambda (perturbation strength, Eq. 5)", cfg["lam"], float)
-    print("    method: static       = paper, one cost map per scenario")
+    print("    method (PP models; CBS models always use static):")
+    print("            static       = paper, one cost map per scenario")
     print("            seq_blackbox = costs recomputed before each agent from the reservations,")
     print("                           black-box gradient through the whole sequential PP")
     print("            seq_teacher  = same model, Gelato-style: trained step by step on")
@@ -202,17 +214,18 @@ def ask_hyperparameters(cfg):
 
 def menu_experiment(cfg, n, info):
     from mapf_nco.paths import training_dir
+    from mapf_nco.planners import training_runs
     from mapf_nco.train import train
 
     if not info["train"]:
         print("  No training data yet: generate first (option 1).")
         return
     cfg = ask_hyperparameters(cfg)
-    for kind in ("edge", "gnn"):
+    for kind, planner in training_runs(cfg):
         print()
-        train(cfg, n, kind, workers=cfg["workers"], log=print)
+        train(cfg, n, kind, workers=cfg["workers"], log=print, planner=planner)
     curves = os.path.join(training_dir(cfg, info["grid"].name, n), "curves.png")
-    print(f"\nExperiment finished. Loss graph (Edge + GNN): {curves}")
+    print(f"\nExperiment finished. Loss graph (all models): {curves}")
     open_file(curves)
     print("Use option 3 to test the models.")
 
@@ -221,7 +234,7 @@ def menu_test(cfg, n, info):
     from mapf_nco.evaluate import test_random, test_saved
     from mapf_nco.paths import test_dir
 
-    if not (info["edge"] or info["gnn"]):
+    if not info["any_model"]:
         print("  (no trained models yet: the test compares original PP with EECBS/CBS only)")
     c = ask("Test on: 1) the saved test scenarios  2) new random scenarios", 1 if info["test"]
             else 2, int, [1, 2])
@@ -284,6 +297,7 @@ def menu_sweep(cfg, n, info):
             cfg["augment"] = True
     g = cfg.get("gnn", {})
     grid_values = {
+        "planner": _ask_values("  planner (pp / cbs / both)", cfg.get("planner", "both"), str),
         "method": _ask_values("  method (static / seq_blackbox / seq_teacher)",
                               cfg.get("method", "static"), str),
         "objective": _ask_values("  objective (usage / makespan / usage+makespan)",
@@ -305,6 +319,9 @@ def menu_sweep(cfg, n, info):
         "gnn_id_dim": _ask_values("  GNN agent-ID size", g.get("id_dim", 8), int),
         "gnn_mlp_hidden": _ask_values("  GNN edge-MLP size", g.get("mlp_hidden", 64), int),
     }
+    if any(v not in ("pp", "cbs", "both") for v in grid_values["planner"]):
+        print("  planner must be pp, cbs or both")
+        return
     if any(v not in ("mean", "sum") for v in grid_values["loss_reduction"]):
         print("  loss must be 'mean' or 'sum'")
         return
@@ -323,7 +340,7 @@ def menu_sweep(cfg, n, info):
         second_count = ask("  Scenarios in the second test set", test_count, int)
     animate = ask_yes("  Save animations too (slower)?", False)
     workers = ask("  Parallel workers", default_workers(), int)
-    print(f"\n  {k} experiment(s) x (train Edge + train GNN + {2 if second_n else 1} test(s)). "
+    print(f"\n  {k} experiment(s) x (train Edge + GNN per planner + {2 if second_n else 1} test(s)). "
           f"Each training takes about epochs x (a few seconds to a minute).")
     if not ask_yes("  Start?", True):
         return
@@ -421,7 +438,7 @@ def interactive(config_path):
 # --------------------------------------------------------------- commands
 HPARAMS = ("epochs", "batch_size", "lr", "lam", "loss_reduction", "w_min", "val_fraction",
            "seed", "device", "expert", "eecbs_bin", "cbs_time_limit", "objective",
-           "makespan_tau", "makespan_weight", "method")
+           "makespan_tau", "makespan_weight", "method", "planner")
 
 
 def parse_args(argv=None):
@@ -449,9 +466,11 @@ def parse_args(argv=None):
     g.add_argument("--augment", action="store_true",
                    help="keep existing data, add missing PP/CBS plans")
 
-    x = sub.add_parser("experiment", help="train both the Edge and the GNN model")
+    x = sub.add_parser("experiment", help="train the Edge and the GNN model")
     common(x)
     x.add_argument("--model", nargs="+", choices=["edge", "gnn"], help="default: both")
+    x.add_argument("--planner", choices=["pp", "cbs", "both"],
+                   help="downstream planner the costs are learned for (default: config, both)")
     for name, typ in (("epochs", int), ("batch_size", int), ("lr", float), ("lam", float),
                       ("w_min", float), ("val_fraction", float), ("seed", int)):
         x.add_argument(f"--{name}", type=typ)
@@ -466,7 +485,8 @@ def parse_args(argv=None):
 
     t = sub.add_parser("test", help="compare PP / EECBS / CBS / trained PP with plots")
     common(t)
-    t.add_argument("--model", nargs="+", choices=["edge", "gnn"])
+    t.add_argument("--model", nargs="+", choices=["edge", "gnn", "edge_cbs", "gnn_cbs"],
+                   help="default: every trained model")
     t.add_argument("--num", type=int, help="saved test instances (default: all)")
     t.add_argument("--random", type=int, metavar="K",
                    help="test on K new random scenarios instead of the saved ones")
@@ -496,7 +516,7 @@ def parse_args(argv=None):
 
     e = sub.add_parser("evaluate", help="Table 1 over all saved test scenarios, no plots")
     common(e)
-    e.add_argument("--model", nargs="+", choices=["edge", "gnn"])
+    e.add_argument("--model", nargs="+", choices=["edge", "gnn", "edge_cbs", "gnn_cbs"])
     return p.parse_args(argv)
 
 
@@ -520,7 +540,9 @@ def main(argv=None):
         explicit["with_cbs"] = False
     cfg = load_config(args.config, args.set, **explicit)
     agents = args.agents or cfg["agent_counts"]
-    models = getattr(args, "model", None) or ["edge", "gnn"]
+    from mapf_nco.planners import MODEL_IDS, training_runs
+
+    models = getattr(args, "model", None)
     workers = args.workers or default_workers()
 
     if args.command == "generate":
@@ -532,18 +554,19 @@ def main(argv=None):
         from mapf_nco.train import train
 
         for n in agents:
-            for kind in models:
-                train(cfg, n, kind, workers=workers)
+            for kind, planner in training_runs(cfg, models or ("edge", "gnn")):
+                train(cfg, n, kind, workers=workers, planner=planner)
 
     if args.command == "test":
         from mapf_nco.evaluate import test_random, test_saved
 
         for n in agents:
             if args.random:
-                test_random(cfg, n, args.test_agents or n, args.random, args.seed, models,
+                test_random(cfg, n, args.test_agents or n, args.random, args.seed,
+                            models or MODEL_IDS,
                             animate=args.animate, workers=workers)
             else:
-                test_saved(cfg, n, args.num, models, animate=args.animate)
+                test_saved(cfg, n, args.num, models or MODEL_IDS, animate=args.animate)
 
     if args.command == "sweep":
         from mapf_nco.experts import generate_datasets
@@ -554,7 +577,7 @@ def main(argv=None):
             key, _, vals = item.partition("=")
             if key not in SWEEPABLE:
                 raise SystemExit(f"cannot sweep '{key}'; choose from {', '.join(SWEEPABLE)}")
-            words = ("mean", "sum", "usage", "makespan", "usage+makespan", "static",
+            words = ("pp", "cbs", "both", "mean", "sum", "usage", "makespan", "usage+makespan", "static",
                      "seq_blackbox", "seq_teacher")
             grid_values[key] = [v if v in words else json.loads(v) for v in vals.split(",")]
         for n in agents:
@@ -573,7 +596,7 @@ def main(argv=None):
     if args.command == "evaluate":
         from mapf_nco.evaluate import evaluate, format_table, save_results
 
-        rows = evaluate(cfg, agents, models)
+        rows = evaluate(cfg, agents, models or MODEL_IDS)
         print("\n" + format_table(rows))
         csv_path, md_path = save_results(rows, os.path.join(cfg["output_dir"], "results"))
         print(f"\nSaved {csv_path} and {md_path}")

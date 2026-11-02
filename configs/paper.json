@@ -15,6 +15,8 @@
   "cbs_time_limit": 60,
 
   "models": ["edge", "gnn"],
+  "planner": "both",
+  "cbs_train_time_limit": 10,
   "epochs": 20,
   "batch_size": 8,
   "lr": 0.0005,

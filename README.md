@@ -119,9 +119,11 @@ python main.py          # settings from configs/paper.json
      instances may have no CBS plan. At 50 agents the expert is already optimal, so it's reused.
 
    For data generated earlier, choose "add missing PP/CBS plans" to keep the EECBS plans and only add the rest.
-2. **Experiment** asks for every hyperparameter (epochs, batch size, learning rate, lambda, loss, w_min,
-   validation fraction, seed and the GNN sizes), trains the Edge model and then the GNN, and opens both loss
-   graphs. It doesn't test.
+2. **Experiment** asks for every hyperparameter (planner, epochs, batch size, learning rate, lambda, loss,
+   w_min, validation fraction, seed and the GNN sizes), trains the Edge model and then the GNN, and opens the
+   loss graphs. It doesn't test. **Planner** picks the downstream algorithm the edge costs are learned for:
+   `pp` (the paper), `cbs`, or `both` (the default), which trains four models: PP (Edge), PP (GNN), CBS (Edge)
+   and CBS (GNN). See [CBS as the downstream planner](#cbs-as-the-downstream-planner).
 3. **Test** asks whether to use the saved test scenarios or new random ones. For new ones it also asks the number
    of agents, which can differ from the training count, then solves them with EECBS and CBS on the spot. Every
    test replaces `test/`. Each `comparison.png` has three parts:
@@ -147,8 +149,8 @@ selected. Each experiment:
 - optionally (answer **y**; the default is no) also tests them on a second set of new random scenarios with a
   different agent count. That set is generated once and shared, so experiments are compared fairly.
 
-Results go to `outputs/sweeps/sweep_<map>_<N>agents_<date>_<time>_<K>exp/`, e.g.
-`sweep_random-32-32-20_20agents_2026-11-02_1430_6exp/` for 6 experiments at 20 agents:
+Results go to `outputs/sweeps/exp_1/`, `exp_2/`, …: each sweep takes the smallest free number, so after
+deleting `exp_2` the next sweep is `exp_2` again. The agent count and settings are in `sweep_summary.md`.
 - **`sweep_summary.md` / `.csv`:** one row per experiment with its settings, best epochs, validation delay and both
   tests' delays. It's updated after every experiment, so a long sweep can be checked while it runs.
 - **`sweep_summary.png`:** a bar chart of every experiment on both test sets, against original PP and EECBS.
@@ -162,7 +164,7 @@ The same from the command line:
 python main.py sweep --agents 50 --grid lr=1e-4,5e-4 lam=0.5,1,2 --num 25    # add --second_agents 25 for a second test set
 ```
 
-Sweepable: method, objective, makespan_tau, makespan_weight, epochs, batch_size, lr, lam, loss_reduction, w_min, val_fraction, seed, gnn_hidden,
+Sweepable: planner, method, objective, makespan_tau, makespan_weight, epochs, batch_size, lr, lam, loss_reduction, w_min, val_fraction, seed, gnn_hidden,
 gnn_num_freqs, gnn_id_dim, gnn_mlp_hidden.
 
 ## Commands (same steps, for scripts)
@@ -170,6 +172,7 @@ gnn_num_freqs, gnn_id_dim, gnn_mlp_hidden.
 ```bash
 python main.py generate   --agents 50                     # add --augment to keep existing data
 python main.py experiment --agents 50 --epochs 30 --lr 5e-4 --lam 1.0 --batch_size 8
+python main.py experiment --agents 20 --planner cbs      # only the CBS models (pp / cbs / both)
 python main.py test       --agents 50 --num 10            # saved test scenarios
 python main.py test       --agents 50 --random 5 --test_agents 75   # 50-agent models, new 75-agent scenarios
 python main.py evaluate   --agents 50 75 100              # paper's Table 1, no plots
@@ -185,9 +188,10 @@ data/scenarios/random-32-32-20/n50/
     train.json.gz, test.json.gz     generated INPUT data: scenarios, PP priority orders,
                                     and the EECBS, PP and CBS plans
 outputs/random-32-32-20/n50/
-    checkpoints/edge.pt, gnn.pt     trained models (the epoch with the best validation delay,
+    checkpoints/edge.pt, gnn.pt     trained PP models (the epoch with the best validation delay,
                                     or validation makespan for a makespan objective)
-    training/curves.png             Edge and GNN together: loss (formula in the title) and
+    checkpoints/edge_cbs.pt, gnn_cbs.pt   trained CBS models (planner cbs or both)
+    training/curves.png             all models together: loss (formula in the title) and
                                     validation metric, with the selected epochs starred
     training/history.csv            the numbers behind the graph, one row per model and epoch
     tensorboard/<model>/            TensorBoard logs of training
@@ -200,7 +204,7 @@ outputs/random-32-32-20/n50/
         instance_000/comparison.png header: hyperparameters; top: PP (orig) | PP (Edge) |
                                     PP (GNN) | EECBS | CBS; bottom: model edge costs
         instance_000/*.png          each method on its own (+ animation.gif with --animate)
-outputs/sweeps/sweep_<map>_50agents_<date>_<K>exp/   option 5: sweep_summary.*, exp_01_<settings>/ ...
+outputs/sweeps/exp_<k>/            option 5 (sweep): sweep_summary.*, exp_01_<settings>/ ...
 outputs/results/table1.md           from `main.py evaluate`
 ```
 
@@ -291,6 +295,28 @@ optimal in about half the scenarios, so gains are small by nature. In a quick ch
 15% of that gap. Set it in the experiment menu, or use
 `python main.py experiment --objective makespan --lam 1 --lr 0.002`.
 
+## CBS as the downstream planner
+
+The paper only uses the learned costs inside PP. With `planner` set to `cbs` (or `both`, the default), the same
+Edge and GNN models are also trained for **CBS**, as separate models (`edge_cbs.pt`, `gnn_cbs.pt`).
+
+- **How CBS uses the costs:** the low-level search adds up the learned cost of every move and wait, and the
+  high-level search expands the node with the smallest total learned cost. So CBS returns the plan that
+  minimises Σₑ wₑ·yₑ. Every action still takes one timestep. This is `WeightedCBS` in `mapf_nco/solver_cbs.py`.
+- **Gradient:** the same black-box rule as for PP (two CBS calls per scenario). Only the planner differs.
+- **Method:** CBS plans all agents together, so the sequential methods don't apply; CBS models always use `static`.
+- **Time limit:** each CBS call during training stops after `cbs_train_time_limit` seconds (default 10). A run that
+  times out gives no gradient, and in validation and testing it falls back to the original CBS plan and counts as
+  a failure. Python CBS is practical up to roughly 20-30 agents on random-32-32-20, not at 50-100.
+- **What to expect:** with unit costs, CBS is already optimal for the sum of costs. With the paper's `usage`
+  objective and an optimal expert, it usually reproduces the expert already, so the loss and gradient are close to
+  zero and the delay can't improve. The learned costs can still change *which* optimal plan CBS finds and how
+  hard it searches, so the best epoch is chosen by validation delay (or makespan), and ties go to the epoch with
+  fewer CBS high-level nodes. The `makespan` objective gives CBS something to improve, because CBS minimises the
+  sum of costs, not the makespan.
+- **Testing:** when CBS models are loaded, the original CBS is also run live with the same time limit, so the
+  times in the table compare fairly. The table gets CBS (Edge) and CBS (GNN) columns.
+
 ## Choices where the paper leaves details open
 
 These are documented so they can be changed if the authors clarify them:
@@ -330,7 +356,8 @@ mapf_nco/
   scenarios.py          scenario sampling, priority orders, dataset and .scen I/O
   solver_pp.py          Prioritized Planning with learned edge costs
   solver_eecbs.py       wrapper around the EECBS binary
-  solver_cbs.py         Python CBS fallback expert
+  solver_cbs.py         Python CBS: fallback expert, and CBS with learned costs (planner cbs)
+  planners.py           planner setting (pp / cbs / both) and model ids
   blackbox.py           black-box gradient through PP
   models.py             Edge and GraphSAGE models
   compare.py / viz.py    test helpers, pictures, animations, training curves

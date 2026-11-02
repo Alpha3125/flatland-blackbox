@@ -162,18 +162,6 @@ The same from the command line:
 python main.py sweep --agents 50 --grid lr=1e-4,5e-4 lam=0.5,1,2 --num 25    # add --second_agents 25 for a second test set
 ```
 
-**Running sweeps on a remote server?** `scripts/fetch_sweep.ps1` (Windows PowerShell) downloads the results
-to your Downloads folder by itself:
-
-```powershell
-.\scripts\fetch_sweep.ps1 -Run    # opens the menu on the server over ssh; downloads the sweep when you quit
-.\scripts\fetch_sweep.ps1 -Wait   # sweep already running on the server (e.g. in tmux): download when it ends
-.\scripts\fetch_sweep.ps1         # download the newest sweep now
-```
-
-Server, repo path and destination are parameters (`-Server`, `-Repo`, `-Dest`). Set up an SSH key once so it
-doesn't ask for your password on every check.
-
 Sweepable: method, objective, makespan_tau, makespan_weight, epochs, batch_size, lr, lam, loss_reduction, w_min, val_fraction, seed, gnn_hidden,
 gnn_num_freqs, gnn_id_dim, gnn_mlp_hidden.
 

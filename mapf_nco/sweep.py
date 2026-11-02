@@ -9,7 +9,8 @@ Edge and GNN models are trained from scratch and then tested on
      only). This set is generated once and shared by all experiments, so they
      are compared fairly.
 
-Everything goes to ``outputs/sweeps/<map>_n<N>_<timestamp>/``:
+Everything goes to ``outputs/sweeps/sweep_<map>_<N>agents_<date>_<time>_<K>exp/``, and each
+experiment to ``exp_01_<the settings that vary>/`` inside it:
 
     sweep_summary.md / .csv          one row per experiment: settings, best epochs,
                                      validation delay, test delays and gaps
@@ -32,6 +33,19 @@ from mapf_nco.scenarios import load_dataset, save_dataset
 # Hyperparameters that can be swept; "gnn_*" map to cfg["gnn"][*].
 SWEEPABLE = ("method", "objective", "makespan_tau", "makespan_weight", "epochs", "batch_size", "lr",
              "lam", "loss_reduction", "w_min", "val_fraction", "seed", "gnn_hidden", "gnn_num_freqs", "gnn_id_dim", "gnn_mlp_hidden")
+
+
+_SHORT = {"loss_reduction": "loss", "makespan_tau": "tau", "makespan_weight": "mw",
+          "batch_size": "batch", "val_fraction": "val", "gnn_hidden": "hidden",
+          "gnn_num_freqs": "freqs", "gnn_id_dim": "id", "gnn_mlp_hidden": "mlp"}
+
+
+def _short(key):
+    return _SHORT.get(key, key)
+
+
+def _val(v):
+    return str(v).replace("+", "-").replace("/", "-")
 
 
 def second_agent_count(n, cfg):
@@ -69,8 +83,10 @@ def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=
     grid = Grid.from_file(cfg["map_path"])
     workers = workers or max(1, (os.cpu_count() or 2) - 1)
     experiments = expand_grid(grid_values)
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    root = os.path.join(cfg["output_dir"], "sweeps", f"{grid.name}_n{n}_{stamp}")
+    stamp = time.strftime("%Y-%m-%d_%H%M")
+    root = os.path.join(cfg["output_dir"], "sweeps",
+                        f"sweep_{grid.name}_{n}agents_{stamp}_{len(experiments)}exp")
+    varying = [k for k, v in grid_values.items() if len(v) > 1]
     os.makedirs(root, exist_ok=True)
     log(f"[sweep] {len(experiments)} experiment(s), {n} agents"
         + (f"; second test on {second_n} agents" if second_n else "") + f". Results: {root}")
@@ -89,10 +105,11 @@ def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=
     rows = []
     for i, settings in enumerate(experiments, 1):
         name = f"exp_{i:02d}"
+        folder = name + "".join(f"_{_short(k)}-{_val(settings[k])}" for k in varying)
         log(f"\n{'=' * 70}\n[sweep] {name}/{len(experiments):02d}: "
             + ", ".join(f"{k}={v}" for k, v in settings.items()) + f"\n{'=' * 70}")
         ecfg = apply_settings(cfg, settings)
-        ecfg["output_dir"] = os.path.join(root, name)
+        ecfg["output_dir"] = os.path.join(root, folder)
         row = {"experiment": name, **settings}
         t0 = time.time()
         for kind in ("edge", "gnn"):

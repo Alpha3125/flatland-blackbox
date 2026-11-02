@@ -107,7 +107,8 @@ python main.py          # settings from configs/paper.json
   2) Experiment: train the Edge and GNN models (choose hyperparameters)
   3) Test: saved test scenarios, or new random scenarios (comparison plots)
   4) Change number of agents
-  5) Sweep: generate + queue of experiments + tests on 2 agent counts
+  5) Sweep: generate + queue of experiments + tests
+  6) Clear outputs (models, plots, results; generated data is kept)
   0) Quit
 ```
 
@@ -128,6 +129,12 @@ python main.py          # settings from configs/paper.json
    - **Top row:** the plans of PP (orig), PP (Edge), PP (GNN), EECBS and CBS.
    - **Bottom row:** the edge costs each model gives that scenario, as a blue (cheaper) to red (dearer)
      gradient.
+6. **Clear outputs** deletes results, after a y/N confirmation (default no):
+   - `1` the models, plots and tests for the current agent count (`outputs/<map>/n<N>/`);
+   - `2` all sweeps (`outputs/sweeps/`);
+   - `3` everything in `outputs/`.
+
+   The generated scenarios in `data/` are never deleted, so you don't have to regenerate.
 
 ### Option 5: Sweep (everything in one go)
 
@@ -140,11 +147,13 @@ selected. Each experiment:
 - optionally (answer **y**; the default is no) also tests them on a second set of new random scenarios with a
   different agent count. That set is generated once and shared, so experiments are compared fairly.
 
-Results go to `outputs/sweeps/<map>_n<N>_<date>/`:
+Results go to `outputs/sweeps/sweep_<map>_<N>agents_<date>_<time>_<K>exp/`, e.g.
+`sweep_random-32-32-20_20agents_2026-11-02_1430_6exp/` for 6 experiments at 20 agents:
 - **`sweep_summary.md` / `.csv`:** one row per experiment with its settings, best epochs, validation delay and both
   tests' delays. It's updated after every experiment, so a long sweep can be checked while it runs.
 - **`sweep_summary.png`:** a bar chart of every experiment on both test sets, against original PP and EECBS.
-- **`exp_01/`, `exp_02/`, …:** each experiment's models, loss graphs, TensorBoard logs and comparison plots
+- **`exp_01_method-static_lr-0.0001/`, `exp_02_…/`, …:** one folder per experiment, named after the settings
+  that vary in the sweep. Each holds that experiment's models, loss graphs, TensorBoard logs and comparison plots
   (`test/` and `test_n<M>/`).
 
 The same from the command line:
@@ -153,7 +162,7 @@ The same from the command line:
 python main.py sweep --agents 50 --grid lr=1e-4,5e-4 lam=0.5,1,2 --num 25    # add --second_agents 25 for a second test set
 ```
 
-Sweepable: epochs, batch_size, lr, lam, loss_reduction, w_min, val_fraction, seed, gnn_hidden,
+Sweepable: method, objective, makespan_tau, makespan_weight, epochs, batch_size, lr, lam, loss_reduction, w_min, val_fraction, seed, gnn_hidden,
 gnn_num_freqs, gnn_id_dim, gnn_mlp_hidden.
 
 ## Commands (same steps, for scripts)
@@ -164,6 +173,7 @@ python main.py experiment --agents 50 --epochs 30 --lr 5e-4 --lam 1.0 --batch_si
 python main.py test       --agents 50 --num 10            # saved test scenarios
 python main.py test       --agents 50 --random 5 --test_agents 75   # 50-agent models, new 75-agent scenarios
 python main.py evaluate   --agents 50 75 100              # paper's Table 1, no plots
+python main.py clean      --agents 50 --what agents       # or --what sweeps / all; add --yes to skip the prompt
 ```
 
 `--set key=value` overrides any entry of `configs/paper.json`.
@@ -190,7 +200,7 @@ outputs/random-32-32-20/n50/
         instance_000/comparison.png header: hyperparameters; top: PP (orig) | PP (Edge) |
                                     PP (GNN) | EECBS | CBS; bottom: model edge costs
         instance_000/*.png          each method on its own (+ animation.gif with --animate)
-outputs/sweeps/<map>_n50_<date>/    option 5 (sweep): sweep_summary.*, exp_01/ ...
+outputs/sweeps/sweep_<map>_50agents_<date>_<K>exp/   option 5: sweep_summary.*, exp_01_<settings>/ ...
 outputs/results/table1.md           from `main.py evaluate`
 ```
 

@@ -18,6 +18,7 @@ Or use the commands directly:
     python main.py sweep      --agents 50 --grid lr=1e-4,5e-4 lam=0.5,1   4 experiments
     python main.py sweep      --agents 50 --grid method=static,seq_blackbox,seq_teacher
     python main.py evaluate   --agents 50 75 100                          Table 1, no plots
+    python main.py clean      --agents 20      (or --what sweeps / --what all)
 
 ``--set key=value`` overrides any entry of the config file.
 """
@@ -333,6 +334,48 @@ def menu_sweep(cfg, n, info):
     open_file(os.path.join(root, "sweep_summary.png"))
 
 
+def clear_outputs(cfg, what, map_name=None, n=None):
+    """Delete outputs. what: 'agents' (one agent count), 'sweeps' or 'all'. Never touches data/."""
+    import shutil
+
+    from mapf_nco.paths import run_dir
+
+    out = os.path.abspath(cfg["output_dir"])
+    target = {"agents": run_dir(cfg, map_name, n) if n is not None else None,
+              "sweeps": os.path.join(cfg["output_dir"], "sweeps"),
+              "all": cfg["output_dir"]}[what]
+    target = os.path.abspath(target)
+    if not (target == out or target.startswith(out + os.sep)):
+        raise ValueError(f"refusing to delete {target}: outside {out}")
+    if not os.path.isdir(target):
+        print(f"  nothing to clear at {target}")
+        return
+    if target == out:  # keep the folder itself (and .gitkeep)
+        for name in os.listdir(out):
+            if name == ".gitkeep":
+                continue
+            p = os.path.join(out, name)
+            shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
+    else:
+        shutil.rmtree(target)
+    print(f"  cleared {target}")
+
+
+def menu_clear(cfg, n, info):
+    from mapf_nco.paths import run_dir
+
+    print(f"  1) results for {n} agents   ({run_dir(cfg, info['grid'].name, n)})")
+    print(f"  2) all sweeps               ({os.path.join(cfg['output_dir'], 'sweeps')})")
+    print(f"  3) everything in outputs    ({cfg['output_dir']})")
+    print("     (the generated scenarios in data/ are never deleted)")
+    c = ask("  Clear", 0, int, [0, 1, 2, 3])
+    if c == 0:
+        return
+    what = {1: "agents", 2: "sweeps", 3: "all"}[c]
+    if ask_yes("  This deletes trained models and results permanently. Sure?", False):
+        clear_outputs(cfg, what, info["grid"].name, n)
+
+
 def interactive(config_path):
     cfg = load_config(config_path)
     print("=" * 64)
@@ -347,9 +390,10 @@ def interactive(config_path):
   2) Experiment: train the Edge and GNN models (choose hyperparameters)
   3) Test: saved test scenarios, or new random scenarios (comparison plots)
   4) Change number of agents
-  5) Sweep: generate + queue of experiments + tests on 2 agent counts
+  5) Sweep: generate + queue of experiments + tests
+  6) Clear outputs (models, plots, results; generated data is kept)
   0) Quit""")
-        c = ask("Choose", None, int, [0, 1, 2, 3, 4, 5])
+        c = ask("Choose", None, int, [0, 1, 2, 3, 4, 5, 6])
         try:
             if c == 0:
                 return
@@ -363,6 +407,8 @@ def interactive(config_path):
                 n = ask("Number of agents", n, int)
             elif c == 5:
                 menu_sweep(cfg, n, info)
+            elif c == 6:
+                menu_clear(cfg, n, info)
         except KeyboardInterrupt:
             print("\n  (interrupted, back to menu)")
         except Exception as e:  # keep the menu alive, show what went wrong
@@ -442,6 +488,12 @@ def parse_args(argv=None):
     w.add_argument("--expert", choices=["eecbs", "cbs"])
     w.add_argument("--eecbs_bin")
 
+    c = sub.add_parser("clean", help="delete outputs (models, plots, results); data/ is kept")
+    common(c)
+    c.add_argument("--what", choices=["agents", "sweeps", "all"], default="agents",
+                   help="agents = outputs of --agents (default); sweeps; all = all of outputs/")
+    c.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+
     e = sub.add_parser("evaluate", help="Table 1 over all saved test scenarios, no plots")
     common(e)
     e.add_argument("--model", nargs="+", choices=["edge", "gnn"])
@@ -509,6 +561,14 @@ def main(argv=None):
             generate_datasets(dict(cfg, augment=True), [n], workers=workers)
             run_sweep(cfg, n, grid_values or {"lr": [cfg["lr"]]}, args.num, args.second_agents,
                       args.second_num, animate=args.animate, workers=workers)
+
+    if args.command == "clean":
+        from mapf_nco.grid import Grid
+
+        name = Grid.from_file(cfg["map_path"]).name
+        if args.yes or ask_yes(f"Delete outputs ({args.what})? Trained models are lost.", False):
+            for n in (agents if args.what == "agents" else [None]):
+                clear_outputs(cfg, args.what, name, n)
 
     if args.command == "evaluate":
         from mapf_nco.evaluate import evaluate, format_table, save_results

@@ -8,7 +8,7 @@
         tensorboard/{edge,gnn,test}/                   TensorBoard logs
         test/                                          comparison plots + tables (replaced on every test)
         test_n<M>/                                     second test set of a sweep
-    outputs/sweeps/<map>_n<N>_<date>/                  sweeps (one exp_XX/ per experiment)
+    outputs/sweeps/sweep_<map>_<N>agents_<date>_<K>exp/ sweeps (one exp_XX_<settings>/ each)
 """
 
 from __future__ import annotations

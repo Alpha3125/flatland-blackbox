@@ -132,13 +132,13 @@ python main.py          # settings from configs/paper.json
 ### Option 5: Sweep (everything in one go)
 
 A sweep generates the data if needed, then runs a queue of experiments. For each hyperparameter you can give
-several values separated by commas, e.g. learning rate `1e-4, 5e-4` and lambda `0.5, 1, 2`, and it runs every
-combination (6 experiments here). Each experiment:
+several values separated by commas, e.g. method `static, seq_blackbox, seq_teacher` and learning rate
+`1e-4, 5e-4`, and it runs every combination (6 experiments here). Every experiment uses the agent count you
+selected. Each experiment:
 - trains the Edge and GNN models from scratch;
-- tests them on the saved test scenarios;
-- tests them on a **second test set with a different agent count**: half the agents when training used 50 or
-  more, otherwise the largest agent count in the config. This set is generated once and shared, so experiments
-  are compared fairly.
+- tests them on the same saved test scenarios (you choose how many);
+- optionally (answer **y**; the default is no) also tests them on a second set of new random scenarios with a
+  different agent count. That set is generated once and shared, so experiments are compared fairly.
 
 Results go to `outputs/sweeps/<map>_n<N>_<date>/`:
 - **`sweep_summary.md` / `.csv`:** one row per experiment with its settings, best epochs, validation delay and both
@@ -150,7 +150,7 @@ Results go to `outputs/sweeps/<map>_n<N>_<date>/`:
 The same from the command line:
 
 ```bash
-python main.py sweep --agents 50 --grid lr=1e-4,5e-4 lam=0.5,1,2 --num 25
+python main.py sweep --agents 50 --grid lr=1e-4,5e-4 lam=0.5,1,2 --num 25    # add --second_agents 25 for a second test set
 ```
 
 Sweepable: epochs, batch_size, lr, lam, loss_reduction, w_min, val_fraction, seed, gnn_hidden,

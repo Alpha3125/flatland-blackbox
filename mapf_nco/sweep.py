@@ -4,10 +4,10 @@ For every combination of the hyperparameter values given (a grid search), the
 Edge and GNN models are trained from scratch and then tested on
 
   1. the saved test scenarios (same agent count as training), and
-  2. a second set of new random scenarios with a different agent count:
-     half the agents when training used >= 50, otherwise a larger count
-     (default: the largest agent count in the config). This set is generated
-     once and shared by all experiments, so they are compared fairly.
+  2. optionally, a second set of new random scenarios with a different agent
+     count (off by default: every experiment then uses the selected agent count
+     only). This set is generated once and shared by all experiments, so they
+     are compared fairly.
 
 Everything goes to ``outputs/sweeps/<map>_n<N>_<timestamp>/``:
 
@@ -69,22 +69,22 @@ def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=
     grid = Grid.from_file(cfg["map_path"])
     workers = workers or max(1, (os.cpu_count() or 2) - 1)
     experiments = expand_grid(grid_values)
-    second_n = second_n or second_agent_count(n, cfg)
     stamp = time.strftime("%Y%m%d_%H%M%S")
     root = os.path.join(cfg["output_dir"], "sweeps", f"{grid.name}_n{n}_{stamp}")
     os.makedirs(root, exist_ok=True)
-    log(f"[sweep] {len(experiments)} experiment(s), trained on {n} agents; "
-        f"second test on {second_n} agents. Results: {root}")
+    log(f"[sweep] {len(experiments)} experiment(s), {n} agents"
+        + (f"; second test on {second_n} agents" if second_n else "") + f". Results: {root}")
 
-    # Shared second test set (generated once).
-    expert, opts = expert_options(cfg, grid, log)
-    test_size = second_count or test_count or cfg.get("num_test", 25)
-    second_path = os.path.join(root, "second_test.json.gz")
-    second, _, _ = make_scenarios(cfg, second_n, test_size, 20_000_000 + second_seed, expert,
-                                  opts, workers, desc=f"second test set ({second_n} agents)")
-    save_dataset(second_path, grid, second, info={"num_agents": second_n, "expert": expert})
-    second, _ = load_dataset(second_path, grid)
-    ename = "EECBS" if expert == "eecbs" else "CBS"
+    second, ename = None, "EECBS" if cfg.get("expert", "eecbs") == "eecbs" else "CBS"
+    if second_n:  # shared second test set (generated once)
+        expert, opts = expert_options(cfg, grid, log)
+        test_size = second_count or test_count or cfg.get("num_test", 25)
+        second_path = os.path.join(root, "second_test.json.gz")
+        second, _, _ = make_scenarios(cfg, second_n, test_size, 20_000_000 + second_seed, expert,
+                                      opts, workers, desc=f"second test set ({second_n} agents)")
+        save_dataset(second_path, grid, second, info={"num_agents": second_n, "expert": expert})
+        second, _ = load_dataset(second_path, grid)
+    tags = [f"n{n}"] + ([f"n{second_n}"] if second_n else [])
 
     rows = []
     for i, settings in enumerate(experiments, 1):
@@ -99,11 +99,14 @@ def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=
             train(ecfg, n, kind, workers=workers, log=log)
         s1 = test_saved(ecfg, n, test_count, ("edge", "gnn"), plots=True, animate=animate,
                         log=log)
-        s2 = run_test(ecfg, grid, n, second, ename,
-                      f"{len(second)} new random scenarios, {second_n} agents",
-                      ("edge", "gnn"), True, animate, log, out_name=f"test_n{second_n}")
+        summaries = [s1]
+        if second_n:
+            summaries.append(run_test(ecfg, grid, n, second, ename,
+                                      f"{len(second)} new random scenarios, {second_n} agents",
+                                      ("edge", "gnn"), True, animate, log,
+                                      out_name=f"test_n{second_n}"))
         row.update(_best_epochs(ecfg, grid, n))
-        for tag, s in ((f"n{n}", s1), (f"n{second_n}", s2)):
+        for tag, s in zip(tags, summaries):
             for m in ("orig", "edge", "gnn"):
                 row[f"{tag}_{m}_delay"] = round(s.get(f"{m}_delay", float("nan")), 2)
                 row[f"{tag}_{m}_makespan"] = round(s.get(f"{m}_makespan", float("nan")), 2)
@@ -113,9 +116,9 @@ def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=
             row[f"{tag}_expert_makespan"] = round(s.get("expert_makespan", float("nan")), 2)
         row["minutes"] = round((time.time() - t0) / 60, 1)
         rows.append(row)
-        _write_summary(root, rows, n, second_n, ename)  # updated after every experiment
+        _write_summary(root, rows, tags, ename)  # updated after every experiment
 
-    plot_sweep_summary(rows, n, second_n, os.path.join(root, "sweep_summary.png"))
+    plot_sweep_summary(rows, tags, os.path.join(root, "sweep_summary.png"))
     log(f"\n[sweep] done. {os.path.join(root, 'sweep_summary.md')}")
     with open(os.path.join(root, "sweep_summary.md"), encoding="utf-8") as f:
         log(f.read())
@@ -136,31 +139,30 @@ def _best_epochs(cfg, grid, n):
     return out
 
 
-def _write_summary(root, rows, n, second_n, ename):
+def _write_summary(root, rows, tags, ename):
     keys = list(dict.fromkeys(k for r in rows for k in r))
     with open(os.path.join(root, "sweep_summary.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=keys)
         w.writeheader()
         w.writerows(rows)
     settings = [k for k in keys if k in SWEEPABLE]
-    head = (["exp"] + settings + ["best ep. Edge/GNN", "val delay Edge/GNN",
-                                  f"test n={n}: PP / Edge / GNN / {ename}",
-                                  f"test n={second_n}: PP / Edge / GNN / {ename}",
-                                  f"makespan n={n}", f"makespan n={second_n}", "min"])
+    head = (["exp"] + settings + ["best ep. Edge/GNN", "val delay Edge/GNN"]
+            + [f"delay {t}: PP / Edge / GNN / {ename}" for t in tags]
+            + [f"makespan {t}" for t in tags] + ["min"])
     lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
     for r in rows:
         cells = [r["experiment"][4:]] + [str(r[k]) for k in settings]
         cells.append(f"{r['edge_best_epoch']} / {r['gnn_best_epoch']}")
         cells.append(f"{r['edge_val_delay']} / {r['gnn_val_delay']}")
-        for tag in (f"n{n}", f"n{second_n}"):
+        for tag in tags:
             cells.append(f"{r[f'{tag}_orig_delay']} / {r[f'{tag}_edge_delay']} / "
                          f"{r[f'{tag}_gnn_delay']} / {r[f'{tag}_expert_delay']}")
-        for tag in (f"n{n}", f"n{second_n}"):
+        for tag in tags:
             cells.append(f"{r[f'{tag}_orig_makespan']} / {r[f'{tag}_edge_makespan']} / "
                          f"{r[f'{tag}_gnn_makespan']} / {r[f'{tag}_expert_makespan']}")
         cells.append(str(r["minutes"]))
         lines.append("| " + " | ".join(cells) + " |")
     with open(os.path.join(root, "sweep_summary.md"), "w", encoding="utf-8") as f:
-        f.write(f"# Sweep: trained on {n} agents\n\nAverage delay and makespan, each as "
-                f"PP / Edge / GNN / expert (lower is better). Second test "
-                f"set: {second_n} agents, shared by all experiments.\n\n" + "\n".join(lines) + "\n")
+        f.write(f"# Sweep: trained on {tags[0][1:]} agents\n\nAverage delay and makespan on the "
+                f"test set(s) {', '.join(tags)}, each as PP / Edge / GNN / expert (lower is "
+                f"better).\n\n" + "\n".join(lines) + "\n")

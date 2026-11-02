@@ -316,13 +316,15 @@ def menu_sweep(cfg, n, info):
         print("  objective must be usage, makespan or usage+makespan")
         return
     k = len(expand_grid(grid_values))
-    test_count = ask("  Saved test instances per experiment", info["test"] or cfg["num_test"], int)
-    second_n = ask("  Agents in the second test set (half if >= 50, else the max)",
-                   second_agent_count(n, cfg), int)
-    second_count = ask("  Scenarios in the second test set", test_count, int)
+    test_count = ask("  Test scenarios per experiment (from the saved test set)",
+                     info["test"] or cfg["num_test"], int)
+    second_n = second_count = None
+    if ask_yes("  Also test on a second set with a different number of agents?", False):
+        second_n = ask("  Agents in the second test set", second_agent_count(n, cfg), int)
+        second_count = ask("  Scenarios in the second test set", test_count, int)
     animate = ask_yes("  Save animations too (slower)?", False)
     workers = ask("  Parallel workers", default_workers(), int)
-    print(f"\n  {k} experiment(s) x (train Edge + train GNN + 2 tests). "
+    print(f"\n  {k} experiment(s) x (train Edge + train GNN + {2 if second_n else 1} test(s)). "
           f"Each training takes about epochs x (a few seconds to a minute).")
     if not ask_yes("  Start?", True):
         return

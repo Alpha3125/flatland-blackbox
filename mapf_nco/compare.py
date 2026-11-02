@@ -13,6 +13,7 @@ from mapf_nco.solver_pp import NoSolutionError
 from mapf_nco.planners import LABELS, MODEL_IDS, WEIGHT_LABELS, split_id  # noqa: F401 (re-exported)
 
 REF = "PP (orig)"
+CBS_TIMEOUT = "CBS timed out"  # key in the times dict: the live original CBS hit its limit
 
 
 def load_models(cfg, grid, n, kinds=MODEL_IDS, log=print):
@@ -67,8 +68,9 @@ def plan_all_timed(planner, sc, models, cbs=None):
     path as the learned models (fair timing; the plan is identical to the stored
     one). EECBS plans come from the dataset. CBS models plan with ``cbs`` (a
     WeightedCBS); then the original CBS is run here too (unit costs, timed, same
-    time limit) so the times compare fairly; otherwise, and if it times out, the
-    CBS plan comes from the dataset.
+    time limit) so the times compare fairly: its time is counted even when it
+    times out (``times[CBS_TIMEOUT]`` is then set), exactly like a CBS model's.
+    Otherwise, and on a timeout, the CBS plan comes from the dataset.
     """
     t0 = time.perf_counter()
     plans = {REF: planner.solve(sc.starts, sc.goals, sc.order,
@@ -80,9 +82,9 @@ def plan_all_timed(planner, sc, models, cbs=None):
         t0 = time.perf_counter()
         try:
             plans["CBS"] = cbs.solve(sc.starts, sc.goals)
-            times["CBS"] = time.perf_counter() - t0
-        except NoSolutionError:
-            pass
+        except NoSolutionError:  # same rule as the CBS models: counted as a failure
+            times[CBS_TIMEOUT] = True
+        times["CBS"] = time.perf_counter() - t0
     for kind, model in models.items():
         t0 = time.perf_counter()
         if kind in cbs_models:

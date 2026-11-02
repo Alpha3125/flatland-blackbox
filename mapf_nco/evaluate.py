@@ -32,8 +32,8 @@ import os
 import numpy as np
 from tqdm import tqdm
 
-from mapf_nco.compare import LABELS, MODEL_IDS, REF, WEIGHT_LABELS, hparams_header, \
-    load_models, plan_all_timed
+from mapf_nco.compare import CBS_TIMEOUT, LABELS, MODEL_IDS, REF, WEIGHT_LABELS, \
+    hparams_header, load_models, plan_all_timed
 from mapf_nco.grid import Grid
 from mapf_nco.metrics import optimality_gap, sum_of_costs
 from mapf_nco.paths import fresh_dir, tensorboard_dir, test_dir
@@ -99,6 +99,8 @@ def run_test(cfg, grid, trained_n, scenarios, ename, label, kinds=MODEL_IDS,
     say = tqdm.write if log is print else log  # print without breaking the progress bar
     for i, sc in enumerate(tqdm(scenarios, desc="test", unit="inst")):
         plans, t, weights, seq_weights = plan_all_timed(planner, sc, models, cbs)
+        if t.get(CBS_TIMEOUT) and "CBS" in fails:
+            fails["CBS"] += 1
         lb = sc.lower_bound(grid)
         row = {"instance": i, "agents": sc.num_agents, "lower_bound": lb,
                "makespan_lower_bound": int(max(grid.bfs_distances(g)[s]
@@ -190,6 +192,7 @@ def _aggregate(n, per_instance, methods, times, fails):
             row["cbs_solved"] = len(vals)
             if times.get(m):
                 row["cbs_time"] = float(np.mean(times[m]))
+                row["cbs_failures"] = fails[m]
             continue
         row[f"{key}_time"] = float(np.mean(times[m])) if times[m] else float("nan")
         if key != "orig":
@@ -242,6 +245,8 @@ def format_table(rows):
                  if f"{m}_time" in r]
         if "cbs_time" in r:
             parts.append(f"CBS (orig): {r['cbs_time'] * 1000:.1f} ms")
+        if r.get("cbs_failures"):
+            parts.append(f"CBS (orig) timeouts: {r['cbs_failures']} (dataset plan used)")
         failures = [f"{NAMES[m]} failures: {r[f'{m}_failures']}" for m in cols
                     if r.get(f"{m}_failures")]
         timing.append(f"- n={r['agents']}: " + ", ".join(parts + failures))

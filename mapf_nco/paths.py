@@ -2,13 +2,15 @@
 
     data/scenarios/<map>/n<N>/{train,test}.json.gz     generated inputs (scenarios + EECBS plans)
     outputs/<map>/n<N>/
-        checkpoints/{edge,gnn}.pt                      trained models (best validation epoch)
-        training/                                      curves.png (Edge + GNN together),
+        checkpoints/{edge,gnn}.pt                      trained PP models (best validation epoch)
+        checkpoints/{edge,gnn}_cbs.pt                  trained CBS models
+        training/                                      curves.png (all models together),
                                                        history.csv, history.json
-        tensorboard/{edge,gnn,test}/                   TensorBoard logs
+        tensorboard/<model>/, tensorboard/test/        TensorBoard logs
         test/                                          comparison plots + tables (replaced on every test)
         test_n<M>/                                     second test set of a sweep
-    outputs/sweeps/sweep_<map>_<N>agents_<date>_<K>exp/ sweeps (one exp_XX_<settings>/ each)
+    outputs/sweeps/exp_<k>/                           sweeps, k = smallest free number
+                                                       (one exp_XX_<settings>/ each)
 """
 
 from __future__ import annotations

@@ -396,7 +396,7 @@ def menu_clear(cfg, n, info):
 def interactive(config_path):
     cfg = load_config(config_path)
     print("=" * 64)
-    print(" MAPF NCO: learned edge costs for Prioritized Planning")
+    print(" MAPF NCO: learned edge costs for Prioritized Planning and CBS")
     print(f" config: {config_path}")
     print("=" * 64)
     n = ask("Number of agents (for data and models)", cfg["agent_counts"][0], int)

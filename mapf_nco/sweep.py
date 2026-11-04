@@ -1,14 +1,18 @@
 """Sweep: one dataset, a queue of experiments, and the same tests for each.
 
 For every combination of the hyperparameter values given (a grid search), the
-chosen model (``model``: edge / potential / potential_edge) is trained from
-scratch, for PP, CBS or both (``planner``), and then tested on
+chosen model (``model``: edge / potential / potential_edge / collision) is trained
+from scratch, for PP, CBS or both (``planner``), and then tested on
 
   1. the saved test scenarios (same agent count as training), and
   2. optionally, a second set of new random scenarios with a different agent
      count (off by default: every experiment then uses the selected agent count
      only). This set is generated once and shared by all experiments, so they
      are compared fairly.
+
+A CBS model is skipped when the original CBS can't solve most validation
+scenarios in time (see mapf_nco.train.train); the tests then use the models that
+were trained, and sweep_summary.md lists the skipped ones.
 
 Everything goes to ``outputs/sweeps/exp_<k>/`` (k = the smallest free number, so deleting
 exp_2 makes the next sweep exp_2 again), and each experiment to
@@ -31,7 +35,7 @@ import re
 import time
 
 from mapf_nco.grid import Grid
-from mapf_nco.planners import KIND_LABELS, MODEL_IDS, kind_of, model_ids, planner_of, training_runs
+from mapf_nco.planners import KIND_LABELS, MODEL_IDS, kind_of, model_ids, planner_of
 from mapf_nco.scenarios import load_dataset, save_dataset
 
 # Hyperparameters that can be swept.
@@ -86,7 +90,7 @@ def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=
               second_seed=777, animate=False, workers=None, log=print):
     from mapf_nco.evaluate import run_test, test_saved
     from mapf_nco.experts import expert_options, make_scenarios
-    from mapf_nco.train import train
+    from mapf_nco.train import run_training
     from mapf_nco.viz import plot_sweep_summary
 
     grid = Grid.from_file(cfg["map_path"])
@@ -119,9 +123,11 @@ def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=
         ecfg["output_dir"] = os.path.join(root, folder)
         row = {"experiment": name, **settings}
         t0 = time.time()
-        for kind, planner in training_runs(ecfg):
-            train(ecfg, n, planner, workers=workers, log=log, kind=kind)
-        ids = model_ids(ecfg)
+        ids = run_training(ecfg, n, workers=workers, log=log)  # skipped CBS models are left out
+        skipped = [m for m in model_ids(ecfg) if m not in ids]
+        if skipped:
+            row["not_trained"] = " / ".join(f"{planner_of(m).upper()} {KIND_LABELS[kind_of(m)]}"
+                                            for m in skipped)
         s1 = test_saved(ecfg, n, test_count, ids, plots=True, animate=animate, log=log)
         summaries = [s1]
         if second_n:
@@ -204,6 +210,11 @@ def _write_summary(root, rows, tags, ename):
                     cells.append(" / ".join(str(r.get(f"{tag}_{m}_{what}", "-")) for m in cols))
         cells.append(str(r["minutes"]))
         lines.append("| " + " | ".join(cells) + " |")
+    notes = [f"- exp {r['experiment'][4:]}: {r['not_trained']}" for r in rows
+             if r.get("not_trained")]
+    if notes:
+        lines += ["", "Not trained (the original CBS timed out on most validation scenarios at "
+                  "this agent count, see the log; '-' in the table):"] + notes
     with open(os.path.join(root, "sweep_summary.md"), "w", encoding="utf-8") as f:
         f.write(f"# Sweep: trained on {tags[0][1:]} agents\n\nAverage delay and makespan on the "
                 f"test set(s) {', '.join(tags)}. PP columns: original PP / learned PP / expert; "

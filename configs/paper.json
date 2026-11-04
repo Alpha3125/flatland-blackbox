@@ -19,6 +19,7 @@
   "collision_init": {"naive": 0.05, "gave_way": 0.05, "close_call": 0.03, "clean": 0.02},
   "planner": "both",
   "cbs_train_time_limit": 10,
+  "cbs_max_timeout_fraction": 0.5,
   "epochs": 20,
   "batch_size": 8,
   "lr": 0.0005,

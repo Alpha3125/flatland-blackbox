@@ -70,15 +70,10 @@ def test_collision_model_costs_and_gradient(grid):
     assert list(m.state_dict()) == ["theta"]
 
 
-@pytest.mark.parametrize("planner,kinds", [(p, k) for p in ("pp", "cbs")
-                                           for k in (("edge",), ("potential", "potential_edge"),
-                                                     ("collision",))])
-def test_train_and_evaluate_smoke(grid, tmp_path, planner, kinds):
-    from mapf_nco.evaluate import evaluate, format_table
-    from mapf_nco.planners import model_id
+def _tiny_setup(grid, tmp_path):
+    """Config and a saved 6-agent dataset (8 train, 2 test) for the training tests."""
     from mapf_nco.scenarios import dataset_path, save_dataset
     from mapf_nco.solver_cbs import solve_cbs
-    from mapf_nco.train import train
 
     from conftest import MAP_PATH
 
@@ -95,6 +90,18 @@ def test_train_and_evaluate_smoke(grid, tmp_path, planner, kinds):
         s.expert_paths = solve_cbs(grid, s.starts, s.goals, time_limit=10)
     save_dataset(dataset_path(cfg["data_dir"], grid.name, 6, "train"), grid, scs[:8])
     save_dataset(dataset_path(cfg["data_dir"], grid.name, 6, "test"), grid, scs[8:])
+    return cfg
+
+
+@pytest.mark.parametrize("planner,kinds", [(p, k) for p in ("pp", "cbs")
+                                           for k in (("edge",), ("potential", "potential_edge"),
+                                                     ("collision",))])
+def test_train_and_evaluate_smoke(grid, tmp_path, planner, kinds):
+    from mapf_nco.evaluate import evaluate, format_table
+    from mapf_nco.planners import model_id
+    from mapf_nco.train import train
+
+    cfg = _tiny_setup(grid, tmp_path)
     for kind in kinds:
         ckpt = train(cfg, 6, planner, workers=1, log=lambda *a: None, kind=kind)
         assert os.path.exists(ckpt) and os.path.basename(ckpt) == f"{model_id(planner, kind)}.pt"
@@ -102,3 +109,45 @@ def test_train_and_evaluate_smoke(grid, tmp_path, planner, kinds):
     for kind in kinds:
         assert f"{model_id(planner, kind)}_delay" in rows[0]
     assert "| 6 |" in format_table(rows)
+
+
+def test_cbs_models_skipped_when_cbs_times_out(grid, tmp_path, monkeypatch):
+    """CBS that times out on every validation scenario: the CBS models are skipped (and
+    potential_edge with them), the PP models still train, and the tests still run."""
+    from mapf_nco.evaluate import test_saved
+    from mapf_nco.paths import checkpoint_path, training_dir
+    from mapf_nco.solver_cbs import WeightedCBS
+    from mapf_nco.solver_pp import NoSolutionError
+    from mapf_nco.train import run_training
+
+    def timeout(self, *a, **k):
+        raise NoSolutionError(0, "CBS time limit")
+
+    cfg = dict(_tiny_setup(grid, tmp_path), planner="both", model="potential_edge")
+    stale = checkpoint_path(cfg, grid.name, 6, "potential_cbs")  # from an earlier run
+    os.makedirs(os.path.dirname(stale), exist_ok=True)
+    open(stale, "w").close()
+    monkeypatch.setattr(WeightedCBS, "solve", timeout)
+    log = []
+    assert run_training(cfg, 6, workers=1, log=log.append) == ["potential", "potential_edge"]
+    for mid in ("potential", "potential_edge"):
+        assert os.path.exists(checkpoint_path(cfg, grid.name, 6, mid))
+    for mid in ("potential_cbs", "potential_edge_cbs"):
+        assert not os.path.exists(checkpoint_path(cfg, grid.name, 6, mid))
+    assert os.path.exists(stale[:-3] + ".old.pt")  # renamed, so it isn't tested as this run's
+    assert any("SKIPPED" in line and "2/2 validation" in line for line in log)
+    import json
+    with open(os.path.join(training_dir(cfg, grid.name, 6), "history.json")) as f:
+        assert sorted(json.load(f)) == ["potential", "potential_edge"]
+    summary = test_saved(cfg, 6, 1, ["potential", "potential_edge"], plots=False,
+                         log=lambda *a: None)
+    assert "potential_delay" in summary and "potential_cbs_delay" not in summary
+
+
+def test_cbs_trains_when_few_timeouts(grid, tmp_path):
+    from mapf_nco.train import run_training
+
+    cfg = dict(_tiny_setup(grid, tmp_path), planner="cbs", model="edge")
+    log = []
+    assert run_training(cfg, 6, workers=1, log=log.append) == ["edge_cbs"]
+    assert any("per call here" in line for line in log)  # the time estimate

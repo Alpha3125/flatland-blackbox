@@ -41,7 +41,7 @@ from mapf_nco.models import build_model, make_batch
 from mapf_nco.scenarios import dataset_path, load_dataset, train_val_split
 from mapf_nco.metrics import edge_usage
 from mapf_nco.paths import checkpoint_path, tensorboard_dir, training_dir
-from mapf_nco.planners import KIND_LABELS, MODEL_IDS, model_id
+from mapf_nco.planners import KIND_LABELS, LABELS, MODEL_IDS, model_id, training_runs
 from mapf_nco.potential import describe
 from mapf_nco.solver_cbs import WeightedCBS
 from mapf_nco.solver_pp import NoSolutionError, PrioritizedPlanner
@@ -109,10 +109,15 @@ class PPRunner:
             if workers > 1 else None
         )
 
-    def map(self, fn, tasks):
+    def map(self, fn, tasks, desc=None):
+        """``fn`` over ``tasks``, results in order. ``desc``: show a progress bar."""
         if self.pool is None:
-            return [fn(t) for t in tasks]
-        return list(self.pool.map(fn, tasks, chunksize=max(1, len(tasks) // (4 * self.workers))))
+            it = (fn(t) for t in tasks)
+        else:
+            it = self.pool.map(fn, tasks, chunksize=max(1, len(tasks) // (4 * self.workers)))
+        if desc:
+            it = tqdm(it, total=len(tasks), desc=desc, unit="scenario", leave=False)
+        return list(it)
 
     def close(self):
         if self.pool is not None:
@@ -132,16 +137,17 @@ def predict_weights(model, scenarios, chunk=16, device="cpu"):
     return np.concatenate(out, 0)
 
 
-def plan_delays(runner, grid, scenarios, weights, fallback=None, planner="pp"):
+def plan_delays(runner, grid, scenarios, weights, fallback=None, planner="pp", desc=None):
     """Delay and makespan of the planner under ``weights`` for each scenario.
 
     If learned weights make the planner fail (PP: no path; CBS: time limit), the
     scenario falls back to ``fallback`` = (soc, makespan) arrays and is counted
     as a failure. Returns (delays, fails, times, makespans, cbs_nodes).
+    ``desc``: show a progress bar with this label.
     """
     tasks = [(s.starts, s.goals, s.order, None if weights is None else weights[i], planner)
              for i, s in enumerate(scenarios)]
-    res = runner.map(_plan_task, tasks)
+    res = runner.map(_plan_task, tasks, desc)
     delays, fails, times, spans, nodes = [], 0, [], [], []
     for i, (s, (soc, span, t, nd)) in enumerate(zip(scenarios, res)):
         times.append(t)
@@ -165,11 +171,18 @@ def set_seed(seed):
 
 # ------------------------------------------------------------------- training
 def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
-    """Train one model (``kind``: edge / potential / potential_edge) for one
-    downstream planner (pp / cbs). Returns the checkpoint path.
+    """Train one model (``kind``: edge / potential / potential_edge / collision) for
+    one downstream planner (pp / cbs). Returns the checkpoint path, or None when a
+    CBS model is skipped.
 
     potential_edge starts from the trained potential model of the same planner
-    (train ``kind="potential"`` first; the menus and commands do this).
+    (train ``kind="potential"`` first; :func:`run_training` does this).
+
+    CBS models: Python CBS gets slow quickly with more agents. If the original
+    CBS times out (``cbs_train_time_limit``) on more than ``cbs_max_timeout_fraction``
+    (default 0.5) of the validation scenarios, CBS can't solve this agent count, the
+    training would take hours and give almost no gradient, so the model is skipped
+    (an earlier checkpoint of it is renamed to <id>.old.pt so it isn't tested).
 
     Writes (replacing earlier runs of the same model):
       checkpoints/<id>.pt, training/{curves.png,history.csv,history.json}, tensorboard/<id>/
@@ -223,12 +236,9 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
     os.makedirs(os.path.dirname(ckpt), exist_ok=True)
     tdir = training_dir(cfg, grid.name, n)
     os.makedirs(tdir, exist_ok=True)
-    tb = TB(tensorboard_dir(cfg, grid.name, n, mid), log)
-    tb.text("config", "\n".join(f"    {k}: {v}" for k, v in sorted(cfg.items())))
-
-    runner = PPRunner(cfg["map_path"], cfg["w_min"], workers,
-                      float(cfg.get("cbs_train_time_limit", 10)))
-    history, batch_losses = [], []
+    cbs_limit = float(cfg.get("cbs_train_time_limit", 10))
+    runner = PPRunner(cfg["map_path"], cfg["w_min"], workers, cbs_limit)
+    history, batch_losses, tb = [], [], None
     try:
         # The planner with its original costs on validation: fallback for failures
         # and reference line. Original CBS falls back to the expert if it times out.
@@ -237,11 +247,34 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
         if planner == "cbs":
             expert_fb = (np.array([sum(len(p) - 1 for p in s.expert_paths) for s in val_set]),
                          np.array(expert_spans))
-        base_delays, base_to, _, base_spans, base_nodes = plan_delays(
-            runner, grid, val_set, None, expert_fb, planner)
-        if base_to:
-            log(f"  original CBS timed out on {base_to}/{len(val_set)} validation scenarios; "
-                "the expert plan is used for those")
+        base_delays, base_to, base_times, base_spans, base_nodes = plan_delays(
+            runner, grid, val_set, None, expert_fb, planner, desc=f"original {PL} on validation")
+        if planner == "cbs":
+            max_frac = float(cfg.get("cbs_max_timeout_fraction", 0.5))
+            if base_to > max_frac * len(val_set):
+                log(f"  SKIPPED: the original CBS timed out ({cbs_limit:g} s per call) on "
+                    f"{base_to}/{len(val_set)} validation scenarios, so Python CBS can't solve "
+                    f"{n}-agent scenarios here. Training would take hours and give almost no "
+                    "gradient (a timed-out call gives none). Use planner pp, fewer agents, or a "
+                    "longer cbs_train_time_limit (skip threshold: cbs_max_timeout_fraction "
+                    f"{max_frac:g}).")
+                if os.path.exists(ckpt):
+                    old = ckpt[:-3] + ".old.pt"
+                    os.replace(ckpt, old)
+                    log(f"  (an earlier {mid} model from another run was renamed to {old})")
+                _update_runs(tdir, mid, None)
+                return None
+            if base_to:
+                log(f"  original CBS timed out on {base_to}/{len(val_set)} validation scenarios; "
+                    "the expert plan is used for those")
+            t = float(base_times.mean())  # seconds per CBS call (timeouts count fully)
+            per_epoch = (2 * t * -(-len(train_set) // B) * -(-B // max(1, workers))
+                         + t * -(-len(val_set) // max(1, workers)))
+            log(f"  CBS takes {t:.1f} s per call here: about {_duration(per_epoch)} per epoch, "
+                f"{_duration(per_epoch * cfg['epochs'])} for {cfg['epochs']} epochs "
+                f"({workers} worker(s))")
+        tb = TB(tensorboard_dir(cfg, grid.name, n, mid), log)
+        tb.text("config", "\n".join(f"    {k}: {v}" for k, v in sorted(cfg.items())))
         base_soc = base_delays + np.array([s.lower_bound(grid) for s in val_set])
         refs = {"metric": metric, "expert_name": ename,
                 "orig_pp": float(base_delays.mean() if metric == "delay" else base_spans.mean()),
@@ -253,7 +286,7 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
         def validate():
             weights = predict_weights(model, val_set, device=device)
             d, fails, _, sp, nodes = plan_delays(runner, grid, val_set, weights,
-                                                 (base_soc, base_spans), planner)
+                                                 (base_soc, base_spans), planner, desc="validation")
             return float(d.mean()), float(sp.mean()), fails, float(nodes.mean())
 
         def score(d, sp, nodes):
@@ -267,7 +300,8 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
             w_all = predict_weights(model, train_set, device=device)
             tasks = [(s.starts, s.goals, s.order, w_all[i], y_star[i], reduction, obj, planner)
                      for i, s in enumerate(train_set)]
-            vals = [v for v in runner.map(_loss_task, tasks) if v is not None]
+            vals = [v for v in runner.map(_loss_task, tasks, desc="training loss")
+                    if v is not None]
             return float(np.mean(vals)) if vals else None
 
         loss0 = train_loss_now()
@@ -380,6 +414,45 @@ def _strengths(kind, grid, model_or_theta):
     return describe(grid, theta)
 
 
+def _duration(sec):
+    if sec < 90:
+        return f"{sec:.0f} s"
+    if sec < 5400:
+        return f"{sec / 60:.0f} min"
+    return f"{sec / 3600:.1f} h"
+
+
+def run_training(cfg, n, workers=1, log=print):
+    """Train every model the config asks for (``model`` x ``planner``, PP first).
+
+    Returns the ids of the models trained. A skipped CBS model (see :func:`train`)
+    also skips its potential_edge model, which would start from it.
+    """
+    done, skipped = [], []
+    for kind, planner in training_runs(cfg):
+        mid = model_id(planner, kind)
+        log("")
+        if kind == "potential_edge" and model_id(planner, "potential") not in done:
+            log(f"[train] n={n} {LABELS[mid]}: skipped, it starts from the "
+                f"{LABELS[model_id(planner, 'potential')]} model, which was skipped")
+            ckpt = checkpoint_path(cfg, Grid.from_file(cfg["map_path"]).name, n, mid)
+            if os.path.exists(ckpt):  # an earlier run's: don't test it as if it were this one
+                os.replace(ckpt, ckpt[:-3] + ".old.pt")
+                log(f"  (an earlier {mid} model from another run was renamed to "
+                    f"{ckpt[:-3]}.old.pt)")
+            _update_runs(training_dir(cfg, Grid.from_file(cfg["map_path"]).name, n), mid, None)
+            skipped.append(mid)
+            continue
+        if train(cfg, n, planner, workers=workers, log=log, kind=kind) is None:
+            skipped.append(mid)
+        else:
+            done.append(mid)
+    if skipped:
+        log(f"\n[train] n={n}: not trained: {', '.join(LABELS[m] for m in skipped)}; "
+            "the tests use the models that were trained")
+    return done
+
+
 def _fmt(v):
     return "   n/a  " if v is None else f"{v:.5f}"
 
@@ -414,7 +487,7 @@ def _update_runs(out_dir, kind, run):
 
     history.json holds every model's run (used to redraw the combined plot);
     history.csv has one row per (model, epoch). Retraining a model replaces only
-    that model's entries.
+    that model's entries; ``run=None`` removes them (a skipped model).
     """
     path = os.path.join(out_dir, "history.json")
     runs = {}
@@ -426,7 +499,12 @@ def _update_runs(out_dir, kind, run):
                 runs = {}  # old per-model format
         except (OSError, ValueError):
             runs = {}
-    runs[kind] = run
+    if run is None:
+        if kind not in runs:
+            return runs
+        del runs[kind]
+    else:
+        runs[kind] = run
     runs = {k: runs[k] for k in MODEL_IDS if k in runs}
     with open(path, "w") as f:
         json.dump(runs, f, indent=1)

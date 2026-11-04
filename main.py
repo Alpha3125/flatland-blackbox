@@ -200,7 +200,8 @@ def ask_hyperparameters(cfg):
             init[key] = ask(f"      {key:9s} ({text})", float(init.get(key, 0.0)), float)
         cfg["potential_init"] = init
     print("    planner: pp   = learn edge costs for Prioritized Planning (the paper)")
-    print("             cbs  = learn edge costs for CBS (optimal; slow for many agents)")
+    print("             cbs  = learn edge costs for CBS (optimal; Python CBS is slow beyond")
+    print("                    ~25 agents: if it can't solve the scenarios, it is skipped)")
     print("             both = a separate model for each")
     cfg["planner"] = ask("    planner", cfg.get("planner", "both"), str, ["pp", "cbs", "both"])
     if cfg["planner"] != "pp":
@@ -232,20 +233,33 @@ def ask_hyperparameters(cfg):
 
 def menu_experiment(cfg, n, info):
     from mapf_nco.paths import training_dir
-    from mapf_nco.planners import training_runs
-    from mapf_nco.train import train
+    from mapf_nco.train import run_training
 
     if not info["train"]:
         print("  No training data yet: generate first (option 1).")
         return
     cfg = ask_hyperparameters(cfg)
-    for kind, planner in training_runs(cfg):
-        print()
-        train(cfg, n, planner, workers=cfg["workers"], log=print, kind=kind)
+    warn_cbs(cfg.get("planner"), n)
+    trained = run_training(cfg, n, workers=cfg["workers"], log=print)
+    if not trained:
+        print("\nNo model was trained (see above).")
+        return
     curves = os.path.join(training_dir(cfg, info["grid"].name, n), "curves.png")
     print(f"\nExperiment finished. Loss graph (all models): {curves}")
     open_file(curves)
     print("Use option 3 to test the models.")
+
+
+CBS_COMFORT = 25  # Python CBS solves random-32-32-20 within ~10 s up to about this many agents
+
+
+def warn_cbs(planners, n):
+    """Heads-up before CBS training with many agents (planners: a setting or a list)."""
+    planners = [planners] if isinstance(planners, str) or planners is None else planners
+    if n > CBS_COMFORT and any(p in ("cbs", "both", None) for p in planners):
+        print(f"  Note: Python CBS is slow with {n} agents (fine up to about {CBS_COMFORT}). "
+              "If it times out on most validation scenarios, the CBS models are skipped "
+              "automatically and the tests use the PP models.")
 
 
 def menu_test(cfg, n, info):
@@ -345,6 +359,7 @@ def menu_sweep(cfg, n, info):
     if any(v not in ("usage", "makespan", "usage+makespan") for v in grid_values["objective"]):
         print("  objective must be usage, makespan or usage+makespan")
         return
+    warn_cbs(grid_values["planner"], n)
     k = len(expand_grid(grid_values))
     test_count = ask("  Test scenarios per experiment (from the saved test set)",
                      min(3, info["test"] or cfg["num_test"]), int)
@@ -557,7 +572,7 @@ def main(argv=None):
         explicit["with_cbs"] = False
     cfg = load_config(args.config, args.set, **explicit)
     agents = args.agents or cfg["agent_counts"]
-    from mapf_nco.planners import MODEL_IDS, training_runs
+    from mapf_nco.planners import MODEL_IDS
 
     models = getattr(args, "models", None)
     workers = args.workers or default_workers()
@@ -568,11 +583,11 @@ def main(argv=None):
         generate_datasets(cfg, agents, workers=workers)
 
     if args.command == "experiment":
-        from mapf_nco.train import train
+        from mapf_nco.train import run_training
 
         for n in agents:
-            for kind, planner in training_runs(cfg):
-                train(cfg, n, planner, workers=workers, kind=kind)
+            warn_cbs(cfg.get("planner"), n)
+            run_training(cfg, n, workers=workers)
 
     if args.command == "test":
         from mapf_nco.evaluate import test_random, test_saved
@@ -598,6 +613,7 @@ def main(argv=None):
                      "edge", "potential", "potential_edge", "collision")
             grid_values[key] = [v if v in words else json.loads(v) for v in vals.split(",")]
         for n in agents:
+            warn_cbs(grid_values.get("planner", cfg.get("planner")), n)
             generate_datasets(dict(cfg, augment=True), [n], workers=workers)
             run_sweep(cfg, n, grid_values or {"lr": [cfg["lr"]]}, args.num, args.second_agents,
                       args.second_num, animate=args.animate, workers=workers)

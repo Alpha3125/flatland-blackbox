@@ -385,7 +385,15 @@ model is also trained for **CBS**, as a separate model (`edge_cbs.pt`).
 - **Gradient:** the same black-box rule as for PP (two CBS calls per scenario). Only the planner differs.
 - **Time limit:** each CBS call during training stops after `cbs_train_time_limit` seconds (default 10). A run that
   times out gives no gradient, and in validation and testing it falls back to the original CBS plan and counts as
-  a failure. Python CBS is practical up to roughly 20-30 agents on random-32-32-20, not at 50-100.
+  a failure. Python CBS is practical up to roughly 20-25 agents on random-32-32-20, not at 34 or 50-100: measured
+  with a 10 s limit, it solves 12 of 16 random scenarios at 20 agents (2.8 s per call on average) and 0 of 16 at
+  34 agents.
+- **Skipped when CBS can't keep up:** before training a CBS model, the original CBS is run on the validation
+  scenarios (with a progress bar). If it times out on more than half of them (`cbs_max_timeout_fraction`, default
+  0.5), the CBS model is skipped with a `SKIPPED` message, and so is its Potential+Edge model. The PP models are
+  still trained, and the tests and comparison plots use the models that were trained. A sweep lists the skipped
+  models under its summary table. Otherwise the log gives an estimate of the time per epoch. Each epoch makes two
+  CBS calls per training scenario plus one per validation scenario, and a batch uses at most `batch_size` workers.
 - **What to expect:** with unit costs, CBS is already optimal for the sum of costs. With the paper's `usage`
   objective and an optimal expert, it usually reproduces the expert already, so the loss and gradient are close to
   zero and the delay can't improve. The learned costs can still change *which* optimal plan CBS finds and how

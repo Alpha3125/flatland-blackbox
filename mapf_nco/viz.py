@@ -74,6 +74,39 @@ def _draw_plans(ax, grid, paths, changed):
             ax.plot(xs, ys, color=FADED, lw=1.0, zorder=1)
 
 
+HOTSPOT_STYLE = {  # type -> (marker, colour, label)
+    "gave_way": ("o", "#d7191c", "gave way (agent waited)"),
+    "close_call": ("D", "#fdae61", "close call (entered a cell another agent left 1 step before)"),
+    "naive": ("X", "#7b3294", "naive collision (individual shortest paths collide)"),
+}
+
+
+def _draw_hotspots(ax, grid, spots):
+    """Transparent markers per cell, one colour per hotspot type, size ~ sqrt(count)."""
+    import numpy as np
+
+    for kind in ("naive", "close_call", "gave_way"):  # naive underneath
+        cells = spots.get(kind)
+        if not cells:
+            continue
+        marker, colour, _ = HOTSPOT_STYLE[kind]
+        rc = np.array([grid.cell(v) for v in cells])
+        n = np.array(list(cells.values()), float)
+        ax.scatter(rc[:, 1], rc[:, 0], s=22 + 26 * np.sqrt(n), marker=marker, color=colour,
+                   alpha=0.6, edgecolors="black", linewidths=0.4, zorder=6)
+
+
+def hotspot_legend(fig, y=0.925):
+    from matplotlib.lines import Line2D
+
+    handles = [Line2D([], [], ls="", marker=m, color=c, markeredgecolor="black", alpha=0.7,
+                      markersize=8, label=lab) for m, c, lab in HOTSPOT_STYLE.values()]
+    fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, y), fontsize=8,
+               ncol=3, frameon=False,
+               title="hotspots: where collisions were avoided (bigger = more often)",
+               title_fontsize=8)
+
+
 def weight_norm(weight_list):
     """Shared colour scale for edge costs, centred on the original cost 1."""
     import numpy as np
@@ -107,11 +140,14 @@ def draw_weights(ax, grid, w, norm, cmap="coolwarm"):
 
 
 def plot_comparison(grid, sc, plans, titles, out_path, reference, weights=None, header=None,
-                    weight_titles=None):
+                    weight_titles=None, hotspots=True):
     """Comparison figure.
 
     Top row: one map per method. Agents whose path differs from the reference
-    (original PP) are coloured and numbered; unchanged agents are grey.
+    (original PP) are coloured and numbered; unchanged agents are grey. With
+    ``hotspots``, each map also marks where collisions were avoided (see
+    mapf_nco/hotspots.py): red = gave way, orange = close call, purple = naive
+    collision (the same on every map).
     Bottom row (if ``weights``): the edge costs each model gives this scenario,
     as a blue (cheaper than 1) to red (dearer) gradient, with the starts (o) and
     goals (*). ``header`` (e.g. the training hyperparameters) is printed on top.
@@ -122,10 +158,20 @@ def plot_comparison(grid, sc, plans, titles, out_path, reference, weights=None, 
     rows = 2 if weights else 1
     cols = max(len(names), len(weights))
     fig, axes = plt.subplots(rows, cols, figsize=(4.9 * cols, 5.3 * rows + 0.6), squeeze=False)
+    naive = None
+    if hotspots:
+        from mapf_nco.hotspots import close_calls, gave_way, naive_collisions
+
+        naive = naive_collisions(grid, sc.starts, sc.goals)
     for ax, name in zip(axes[0], names):
         _draw_map(ax, grid)
         _draw_plans(ax, grid, plans[name], changed[name])
-        ax.set_title(titles[name], fontsize=10)
+        title = titles[name]
+        if hotspots:
+            gw, cc = gave_way(plans[name]), close_calls(plans[name])
+            _draw_hotspots(ax, grid, {"gave_way": gw[0], "close_call": cc[0], "naive": naive[0]})
+            title += f"\ngave way {gw[1]}  |  close calls {cc[1]}"
+        ax.set_title(title, fontsize=10)
     for ax in axes[0][len(names):]:
         ax.axis("off")
     if weights:
@@ -146,13 +192,19 @@ def plot_comparison(grid, sc, plans, titles, out_path, reference, weights=None, 
                           ax=list(axes[1][:len(weights)]), fraction=0.03, pad=0.02)
         cb.set_label("edge cost (blue = cheaper, red = dearer than original 1)")
     top = "Top: coloured = agents whose path differs from the original PP plan, grey = unchanged."
+    # Layout in inches: header (~0.55 in), hotspot legend (~0.45 in), two-line panel titles.
+    H = fig.get_figheight()
+    axes_top = 1 - (1.55 if hotspots else 0.75) / H
+    if hotspots:
+        top += f"  Naive collisions (same on every map): {naive[1]}."
+        hotspot_legend(fig, y=1 - 0.55 / H)
     if weights:
         top += "  Bottom: edge costs the models assign (gradient)."
     fig.suptitle((header + "\n" if header else "") + top, fontsize=9)
     if not weights:
-        fig.tight_layout(rect=(0, 0, 1, 0.93))
+        fig.tight_layout(rect=(0, 0, 1, axes_top + 0.04))
     else:
-        fig.subplots_adjust(top=0.9, hspace=0.12, wspace=0.05, left=0.02, right=0.97,
+        fig.subplots_adjust(top=axes_top, hspace=0.16, wspace=0.05, left=0.02, right=0.97,
                             bottom=0.02)
     return _save(fig, out_path, dpi=120)
 
@@ -218,6 +270,7 @@ MODEL_COLORS = {  # model id -> (dark, light)
     "edge": ("#4292c6", "#c6dbef"), "potential": ("#fd8d3c", "#fdd0a2"),
     "potential_edge": ("#d62728", "#f4a6a6"), "edge_cbs": ("#17becf", "#a8e6ee"),
     "potential_cbs": ("#8c564b", "#d7c0bb"), "potential_edge_cbs": ("#e377c2", "#f6c9e9"),
+    "collision": ("#8c6d31", "#e7cb94"), "collision_cbs": ("#393b79", "#9c9ede"),
 }
 
 

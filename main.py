@@ -6,7 +6,7 @@ Run without arguments for the interactive menu:
     python main.py                              (uses configs/paper.json)
 
     1) Generate  scenarios with pre-computed EECBS (expert), CBS (optimal) and PP plans
-    2) Experiment  train the Edge / Potential / Potential+Edge model for PP, CBS or both
+    2) Experiment  train the Edge / Potential / Potential+Edge / Collision model for PP, CBS or both
     3) Test  on the saved test scenarios, or on new random ones with any number of agents
 
 Or use the commands directly:
@@ -32,8 +32,8 @@ import sys
 
 DEFAULT_CONFIG = "configs/paper.json"
 # Model ids accepted by test / evaluate --model (kept here so parsing needs no imports).
-MODEL_ID_CHOICES = ("edge", "potential", "potential_edge",
-                    "edge_cbs", "potential_cbs", "potential_edge_cbs")
+MODEL_ID_CHOICES = ("edge", "potential", "potential_edge", "collision",
+                    "edge_cbs", "potential_cbs", "potential_edge_cbs", "collision_cbs")
 
 
 # ------------------------------------------------------------------ config
@@ -175,9 +175,21 @@ def ask_hyperparameters(cfg):
     print("           potential      = PotP: learned strengths for moving towards obstructions,")
     print("                            into single-lane passages and dead ends, plus one-way lanes")
     print("           potential_edge = potential first, then the Edge model starting from its costs")
+    print("           collision      = per scenario: dearer into cells where collisions happen,")
+    print("                            cheaper into clean cells (4 learned strengths)")
     cfg["model"] = ask("    model", cfg.get("model", "edge"), str,
-                       ["edge", "potential", "potential_edge"])
-    if cfg["model"] != "edge":
+                       ["edge", "potential", "potential_edge", "collision"])
+    if cfg["model"] == "collision":
+        init = dict(cfg.get("collision_init", {}))
+        print("    collision model's starting strengths (0 = no effect; positive = dearer / "
+              "cheaper for clean):")
+        for key, text in (("naive", "into a cell where individual shortest paths collide"),
+                          ("gave_way", "into a cell where the original PP plan waited"),
+                          ("close_call", "into a cell with a close call in the original PP"),
+                          ("clean", "cheaper: into a cell with none of these")):
+            init[key] = ask(f"      {key:10s} ({text})", float(init.get(key, 0.0)), float)
+        cfg["collision_init"] = init
+    elif cfg["model"] != "edge":
         init = dict(cfg.get("potential_init", {}))
         print("    potential model's starting strengths (0 = no effect; positive = dearer):")
         for key, text in (("toward", "moving towards an obstruction"),
@@ -302,7 +314,7 @@ def menu_sweep(cfg, n, info):
             print("  (existing data will get its missing PP/CBS plans added)")
             cfg["augment"] = True
     grid_values = {
-        "model": _ask_values("  model (edge / potential / potential_edge)",
+        "model": _ask_values("  model (edge / potential / potential_edge / collision)",
                              cfg.get("model", "edge"), str),
         "planner": _ask_values("  planner (pp / cbs / both)", cfg.get("planner", "both"), str),
         "objective": _ask_values("  objective (usage / makespan / usage+makespan)",
@@ -320,8 +332,9 @@ def menu_sweep(cfg, n, info):
         "val_fraction": _ask_values("  validation fraction", cfg["val_fraction"], float),
         "seed": _ask_values("  seed", cfg["seed"], int),
     }
-    if any(v not in ("edge", "potential", "potential_edge") for v in grid_values["model"]):
-        print("  model must be edge, potential or potential_edge")
+    if any(v not in ("edge", "potential", "potential_edge", "collision")
+           for v in grid_values["model"]):
+        print("  model must be edge, potential, potential_edge or collision")
         return
     if any(v not in ("pp", "cbs", "both") for v in grid_values["planner"]):
         print("  planner must be pp, cbs or both")
@@ -406,7 +419,7 @@ def interactive(config_path):
         info = status(cfg, n)
         print("""
   1) Generate scenarios + EECBS, CBS and PP plans
-  2) Experiment: train a model (Edge / Potential / Potential+Edge; choose hyperparameters)
+  2) Experiment: train a model (Edge / Potential / Potential+Edge / Collision; choose settings)
   3) Test: saved test scenarios, or new random scenarios (comparison plots)
   4) Change number of agents
   5) Sweep: generate + queue of experiments + tests
@@ -468,11 +481,13 @@ def parse_args(argv=None):
     g.add_argument("--augment", action="store_true",
                    help="keep existing data, add missing PP/CBS plans")
 
-    x = sub.add_parser("experiment", help="train the Edge / Potential / Potential+Edge model")
+    x = sub.add_parser("experiment",
+                       help="train the Edge / Potential / Potential+Edge / Collision model")
     common(x)
-    x.add_argument("--model", choices=["edge", "potential", "potential_edge"],
-                   help="how the edge costs are learned (default: config, edge); set the potential "
-                        "model's starting strengths with --set potential_init='{\"toward\": 0.2}'")
+    x.add_argument("--model", choices=["edge", "potential", "potential_edge", "collision"],
+                   help="how the edge costs are learned (default: config, edge); set starting "
+                        "strengths with --set potential_init='{\"toward\": 0.2}' or "
+                        "collision_init='{\"naive\": 0.05}'")
     x.add_argument("--planner", choices=["pp", "cbs", "both"],
                    help="downstream planner the costs are learned for (default: config, both)")
     for name, typ in (("epochs", int), ("batch_size", int), ("lr", float), ("lam", float),
@@ -580,7 +595,7 @@ def main(argv=None):
             if key not in SWEEPABLE:
                 raise SystemExit(f"cannot sweep '{key}'; choose from {', '.join(SWEEPABLE)}")
             words = ("pp", "cbs", "both", "mean", "sum", "usage", "makespan", "usage+makespan",
-                     "edge", "potential", "potential_edge")
+                     "edge", "potential", "potential_edge", "collision")
             grid_values[key] = [v if v in words else json.loads(v) for v in vals.split(",")]
         for n in agents:
             generate_datasets(dict(cfg, augment=True), [n], workers=workers)

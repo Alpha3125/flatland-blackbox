@@ -7,9 +7,13 @@
   learnable strengths on fixed map features (closeness to obstructions,
   single-lane passages, dead ends) plus a learnable one-way preference per row
   and per column: w = 1 + F @ theta.
+* :class:`CollisionModel` (see mapf_nco/collision.py): four learnable strengths
+  on per-scenario collision features (individual shortest paths colliding, and
+  the original PP plan's waits and close calls): w = 1 + F(scenario) @ theta.
 
-Neither looks at the scenario's starts and goals: the same cost vector is used
-for every scenario. Both return a tensor of shape (B, M), one row per scenario.
+The Edge and potential models ignore the scenario (one cost vector for all);
+the collision model's costs depend on it. All return a tensor of shape (B, M),
+one row per scenario.
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ import torch.nn as nn
 from mapf_nco.potential import feature_matrix, init_theta
 from mapf_nco.scenarios import scenario_arrays
 
-KINDS = ("edge", "potential", "potential_edge")
+KINDS = ("edge", "potential", "potential_edge", "collision")
 
 
 class EdgeModel(nn.Module):
@@ -60,18 +64,54 @@ class PotentialModel(nn.Module):
         return self.costs().unsqueeze(0).expand(B, -1)
 
 
+class CollisionModel(nn.Module):
+    """w = 1 + F(scenario) @ theta with the collision features of mapf_nco/collision.py.
+
+    The features are computed from the batch (starts, goals and the priority order
+    from the ranks) and cached per scenario; they need no expert.
+    """
+
+    def __init__(self, grid, init=None):
+        super().__init__()
+        from mapf_nco.collision import init_theta
+
+        self.grid = grid
+        self._cache = {}
+        self.theta = nn.Parameter(torch.from_numpy(init_theta(init)))
+
+    def features(self, starts, goals, ranks):
+        from mapf_nco.collision import scenario_features
+
+        order = [int(i) for i in np.argsort(ranks, kind="stable")]
+        key = (tuple(int(s) for s in starts), tuple(int(g) for g in goals), tuple(order))
+        if key not in self._cache:
+            self._cache[key] = scenario_features(self.grid, list(key[0]), list(key[1]), order)
+        return self._cache[key]
+
+    def forward(self, batch):
+        S, G, R = (batch[k].cpu().numpy() for k in ("starts", "goals", "ranks"))
+        F = np.stack([self.features(S[b], G[b], R[b]) for b in range(len(S))])  # (B, M, K)
+        B, M, K = F.shape
+        Ft = torch.from_numpy(F.reshape(B * M, K)).to(self.theta.device)
+        return (Ft @ self.theta + 1.0).reshape(B, M)
+
+
 def build_model(kind, grid, init=None):
     """``init``: edge / potential_edge -> start costs (number or vector, default 1);
-    potential -> start strengths (dict, see potential.DEFAULT_INIT)."""
+    potential / collision -> start strengths (dict, see potential.DEFAULT_INIT /
+    collision.DEFAULT_INIT)."""
     if kind in ("edge", "potential_edge"):
         return EdgeModel(grid.num_edges, 1.0 if init is None else init)
     if kind == "potential":
         return PotentialModel(grid, init)
+    if kind == "collision":
+        return CollisionModel(grid, init)
     raise ValueError(f"Unknown model type: {kind} (choose from {', '.join(KINDS)})")
 
 
 def make_batch(scenarios, device="cpu"):
-    """Model input for a list of scenarios (the models only use the batch size)."""
+    """Model input for a list of scenarios (the Edge and potential models only use the
+    batch size; the collision model reads the starts, goals and priority ranks)."""
     starts, goals, ranks = scenario_arrays(scenarios)
     return {
         "starts": torch.from_numpy(starts).to(device),

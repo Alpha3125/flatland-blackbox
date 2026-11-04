@@ -124,15 +124,25 @@ python main.py          # settings from configs/paper.json
 2. **Experiment** asks for every hyperparameter (model, planner, epochs, batch size, learning rate, lambda,
    objective, loss, w_min, validation fraction and seed), trains the model(s) and opens the loss graph. It
    doesn't test.
-   - **Model** sets how the edge costs are learned: `edge` (the paper, the default), `potential`, or
-     `potential_edge`. See [Potential-based edge costs](#potential-based-edge-costs-potp).
+   - **Model** sets how the edge costs are learned: `edge` (the paper, the default), `potential`,
+     `potential_edge`, or `collision`. See [Potential-based edge costs](#potential-based-edge-costs-potp)
+     and [Collision-based edge costs](#collision-based-edge-costs).
    - **Planner** picks the downstream algorithm the costs are learned for: `pp` (the paper), `cbs`, or `both`
      (the default), a separate model for each. See [CBS as the downstream planner](#cbs-as-the-downstream-planner).
 3. **Test** asks whether to use the saved test scenarios or new random ones. For new ones it also asks the number
    of agents, which can differ from the training count, then solves them with EECBS and CBS on the spot. Every
    test replaces `test/`. Each `comparison.png` has three parts:
    - **Header:** the training hyperparameters and the best epoch.
-   - **Top row:** the plans of PP (orig), PP (Edge), CBS (Edge) if trained, EECBS and CBS.
+   - **Top row:** the plans of PP (orig), each trained model, EECBS and CBS. Every plan is collision-free, so
+     the coloured markers show where collisions were *avoided* (`mapf_nco/hotspots.py`; bigger = more often):
+     - **red circles, "gave way":** an agent waited. A wait only adds cost, so it always means another agent
+       was in the way.
+     - **orange diamonds, "close call":** an agent entered a cell that another agent left one step earlier, one
+       slip from a collision. Agents following each other down a corridor show up as a chain.
+     - **purple crosses, "naive collision":** where the agents' individual shortest paths, each planned alone,
+       would collide if nobody coordinated. These are the same on every map.
+
+     Each title also gives that plan's "gave way" and "close calls" counts.
    - **Bottom row:** each model's learned edge costs, as a blue (cheaper) to red (dearer) gradient.
 6. **Clear outputs** deletes results, after a y/N confirmation (default no):
    - `1` the models, plots and tests for the current agent count (`outputs/<map>/n<N>/`);
@@ -176,7 +186,7 @@ python main.py generate   --agents 50                     # add --augment to kee
 python main.py experiment --agents 50 --epochs 30 --lr 5e-4 --lam 1.0 --batch_size 8
 python main.py experiment --agents 20 --planner cbs      # only the CBS models (pp / cbs / both)
 python main.py experiment --agents 50 --model potential_edge --planner pp
-python main.py sweep      --agents 50 --grid model=edge,potential,potential_edge --num 25   # compare them
+python main.py sweep      --agents 50 --grid model=edge,potential,collision --num 25   # compare them
 python main.py test       --agents 50 --num 10            # saved test scenarios
 python main.py test       --agents 50 --random 5 --test_agents 75   # 50-agent models, new 75-agent scenarios
 python main.py evaluate   --agents 50 75 100              # paper's Table 1, no plots
@@ -299,6 +309,46 @@ Two things to keep in mind when reading the results:
   training log then says so ("the selected model is worse than the original PP on validation"). With small
   datasets (a dozen validation scenarios) this is mostly noise; compare on 50+ test scenarios.
 
+## Collision-based edge costs
+
+The `collision` model makes moves into cells where collisions happen dearer, and moves into collision-free
+cells cheaper. Unlike the Edge and potential models, its costs are different for every scenario. They're
+computed from the scenario's own starts, goals and priority order, with no expert, using the three
+[hotspot](#using-it-the-interactive-menu) types:
+
+```
+w(u→v) = 1 + θ_naive·log(1 + naive(v)) + θ_gave_way·log(1 + gave_way(v)) + θ_close_call·log(1 + close_call(v))
+           − θ_clean·[v has none of them]                                   (waits keep cost 1)
+```
+
+- **`naive(v)`:** collisions at v between the agents' individual shortest paths, each planned alone.
+- **`gave_way(v)`, `close_call(v)`:** waits and close calls at v in the original PP plan.
+- **Training:** the four strengths θ are learned with the same black-box gradient
+  (`mapf_nco/collision.py`, `CollisionModel` in `mapf_nco/models.py`). The training log prints them after every
+  epoch, and test plots list them in the header.
+- **Starting strengths** (`collision_init`): naive 0.05, gave_way 0.05, close_call 0.03, clean 0.02.
+
+A check with no training, PP on random scenarios with and without these costs (no expert involved):
+
+| added cost | 50 agents (120 scenarios) | 75 agents (60 scenarios) |
+|---|---|---|
+| naive 0.1 | delay −14.4 % (better in 83, worse in 30) | −18.7 % (47 / 9) |
+| clean 0.05 | −12.7 % (82 / 23) | −15.4 % (53 / 5) |
+| close_call 0.05 | −13.6 % (77 / 30) | −15.8 % (46 / 9) |
+| **naive 0.05, gave_way 0.05, close_call 0.03, clean 0.02** (default) | **−15.4 % (82 / 25)** | **−20.9 % (50 / 6)** |
+| naive 0.5, gave_way 0.5, close_call 0.2 (too strong) | +5.6 % (26 / 89) | |
+
+With the default strengths it also helps with fewer agents (200 random scenarios each): −12.8 % at 15 agents
+(better in 53, worse in 17), −17.5 % at 20 (86 / 24) and −11.2 % at 30 (113 / 43). For comparison, the
+potential model's best starting costs gave −6 to −8 %. The effect is about the same at
+0.05 as at 0.1. So it works mainly by breaking ties between equally short routes in favour of the one away
+from hotspots, rather than by forcing detours. Strong costs force detours and make PP worse.
+
+- **Cost:** each scenario first needs the original PP plan and every agent's individual shortest path, then
+  PP runs again on the new costs. Test timings include this; features are cached per scenario during training.
+- **Same caveat as the potential model:** epoch 0 is the starting strengths, not the original PP, and the
+  paper's training loss is a poor guide. The best epoch is chosen by validation delay.
+
 ## Makespan objective (extension, not in the paper)
 
 The paper's loss makes PP copy EECBS, which minimises the **sum** of arrival times. Setting `objective` to
@@ -383,8 +433,10 @@ mapf_nco/
   solver_cbs.py         Python CBS: fallback expert, and CBS with learned costs (planner cbs)
   planners.py           model (edge / potential / potential_edge) and planner (pp / cbs / both) settings, model ids
   potential.py          map features of the potential model (obstructions, single-lane passages, lanes)
+  hotspots.py           where collisions were avoided: waits, close calls, naive collisions
+  collision.py          per-scenario features of the collision model (from the hotspots)
   blackbox.py           black-box gradient through PP
-  models.py             the Edge model and the potential model
+  models.py             the Edge, potential and collision models
   compare.py / viz.py    test helpers, pictures, animations, training curves
   sweep.py              option 5: queue of experiments, shared second test set, summary
   paths.py / tb.py       output folder layout, TensorBoard logging

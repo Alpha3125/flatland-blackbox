@@ -135,10 +135,12 @@ def hparams_header(models, trained_n):
     parts.append("best epoch " + ", ".join(
         f"{LABELS[k]}: {m.ckpt_info.get('epoch')}" for k, m in models.items()))
     for k, m in models.items():
-        if kind_of(k) == "potential":
-            from mapf_nco.potential import STRENGTHS
-
+        if kind_of(k) in ("potential", "collision"):
+            if kind_of(k) == "potential":
+                from mapf_nco.potential import STRENGTHS as names
+            else:
+                from mapf_nco.collision import FEATURES as names
             th = m.theta.detach().cpu().numpy()
             parts.append(f"{LABELS[k]}: " + ", ".join(f"{n} {th[i]:+.2f}"
-                                                       for i, n in enumerate(STRENGTHS)))
+                                                       for i, n in enumerate(names)))
     return " | ".join(parts)

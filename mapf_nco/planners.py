@@ -6,6 +6,9 @@
                     single-lane passages, dead ends) + one-way lanes; see potential.py
   "potential_edge"  train the potential model, then start the Edge model from its
                     costs and train per edge (both models are kept)
+  "collision"       per scenario: dearer into cells where collisions happen (individual
+                    shortest paths, the original PP plan's waits and close calls),
+                    cheaper into clean cells; four learned strengths; see collision.py
 
 ``cfg["planner"]``: who uses the costs
   "pp"    Prioritized Planning (the paper)
@@ -19,9 +22,10 @@ e.g. edge, potential_edge_cbs.
 from __future__ import annotations
 
 PLANNER_CHOICES = ("pp", "cbs", "both")
-MODEL_CHOICES = ("edge", "potential", "potential_edge")
-KINDS = ("edge", "potential", "potential_edge")
-KIND_LABELS = {"edge": "Edge", "potential": "Potential", "potential_edge": "Potential+Edge"}
+MODEL_CHOICES = ("edge", "potential", "potential_edge", "collision")
+KINDS = MODEL_CHOICES
+KIND_LABELS = {"edge": "Edge", "potential": "Potential", "potential_edge": "Potential+Edge",
+               "collision": "Collision"}
 
 
 def model_id(planner, kind="edge"):

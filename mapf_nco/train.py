@@ -199,10 +199,10 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
 
     device = cfg.get("device", "cpu")
     model_kwargs = {}  # what load_model needs to rebuild the model
-    if kind == "potential":
-        model_kwargs = {"init": dict(cfg.get("potential_init", {}))}
+    if kind in ("potential", "collision"):
+        model_kwargs = {"init": dict(cfg.get(f"{kind}_init", {}))}
         model = build_model(kind, grid, **model_kwargs).to(device)
-        log(f"  start: {describe(grid, model.theta.detach().cpu().numpy())}")
+        log(f"  start: {_strengths(kind, grid, model)}")
     elif kind == "potential_edge":
         pot_ckpt = checkpoint_path(cfg, grid.name, n, model_id(planner, "potential"))
         if not os.path.exists(pot_ckpt):
@@ -338,8 +338,8 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
                 + f"{'  *best' if improved else '       '}  "
                 f"[{PL} fails val {vfails}/train {n_fail}, zero-grad {n_zero}/{len(idx)}, "
                 f"{time.time() - t0:.0f}s]")
-            if kind == "potential":
-                log(f"             {describe(grid, model.theta.detach().cpu().numpy())}")
+            if kind in ("potential", "collision"):
+                log(f"             {_strengths(kind, grid, model)}")
     finally:
         runner.close()
 
@@ -356,16 +356,28 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
     if best[0] > refs["orig_pp"] + 1e-9:
         log(f"  note: the selected model is worse than the original {PL} on validation "
             f"({best[0]:.2f} vs {refs['orig_pp']:.2f} {metric})"
-            + ("; its starting strengths (potential_init) don't help on this data"
-               if kind != "edge" else ""))
-    if kind == "potential":
+            + (f"; its starting strengths ({'collision' if kind == 'collision' else 'potential'}"
+               "_init) don't help on this data" if kind != "edge" else ""))
+    if kind in ("potential", "collision"):
         ck = torch.load(ckpt, map_location="cpu", weights_only=False)
         log(f"  learned strengths (epoch {best_epoch}): "
-            f"{describe(grid, np.asarray(ck['state_dict']['theta'], dtype=float))}")
+            f"{_strengths(kind, grid, np.asarray(ck['state_dict']['theta'], dtype=float))}")
     log(f"  model:       {ckpt}")
     log(f"  loss graph:  {curves}")
     log(f"  tensorboard: tensorboard --logdir {os.path.dirname(tensorboard_dir(cfg, grid.name, n, mid))}")
     return ckpt
+
+
+def _strengths(kind, grid, model_or_theta):
+    """Readable strengths of a potential or collision model (or of its theta vector)."""
+    theta = model_or_theta
+    if hasattr(theta, "theta"):
+        theta = theta.theta.detach().cpu().numpy()
+    if kind == "collision":
+        from mapf_nco.collision import describe as describe_collision
+
+        return describe_collision(theta)
+    return describe(grid, theta)
 
 
 def _fmt(v):
@@ -384,14 +396,17 @@ def _log_epoch(tb, model, kind, h, refs):
     tb.scalar("val/cbs_nodes", h.get("val_cbs_nodes"), e)
     tb.scalar("train/zero_grad_scenarios", h.get("zero_grad_scenarios"), e)
     tb.scalar("time/epoch_seconds", h.get("seconds"), e)
-    with torch.no_grad():
-        tb.histogram("weights/edge_costs", model.costs().detach().cpu().numpy(), e)
-    if kind == "potential":
-        from mapf_nco.potential import STRENGTHS
-
+    if hasattr(model, "costs"):  # the collision model's costs differ per scenario
+        with torch.no_grad():
+            tb.histogram("weights/edge_costs", model.costs().detach().cpu().numpy(), e)
+    if kind in ("potential", "collision"):
+        if kind == "potential":
+            from mapf_nco.potential import STRENGTHS as names
+        else:
+            from mapf_nco.collision import FEATURES as names
         theta = model.theta.detach().cpu().numpy()
-        for i, name in enumerate(STRENGTHS):
-            tb.scalar(f"potential/{name}", float(theta[i]), e)
+        for i, name in enumerate(names):
+            tb.scalar(f"{kind}/{name}", float(theta[i]), e)
 
 
 def _update_runs(out_dir, kind, run):

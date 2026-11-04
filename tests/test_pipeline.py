@@ -215,34 +215,66 @@ def test_variant_list():
         variant_list({"pipeline_variants": ["fast"]}, ["potential"])
 
 
-def test_pipeline_smoke(grid, tmp_path):
+def _pipeline_cfg(tmp_path, **kw):
     from conftest import MAP_PATH
+
+    return {"map_path": MAP_PATH, "output_dir": str(tmp_path / "out"), "w_min": 1e-3, "seed": 0,
+            "pipeline_train": 10, "pipeline_val": 6, "pipeline_test": 5, "pipeline_cbs_test": 3,
+            "pipeline_evals": 8, "pipeline_plots": None, "pipeline_time_limit": 20,
+            "potential_init": {"toward": 0.2, "corridor": 0.2, "lanes": 0.0},
+            "collision_init": {"naive": 0.05}, "scp_dest": None, **kw}
+
+
+def test_pipeline_sweep(grid, tmp_path):
     from mapf_nco.pipeline import run_pipeline
 
-    cfg = {"map_path": MAP_PATH, "output_dir": str(tmp_path / "out"), "w_min": 1e-3, "seed": 0,
-           "pipeline_train": 10, "pipeline_val": 6, "pipeline_test": 5, "pipeline_cbs_test": 3,
-           "pipeline_evals": 8, "pipeline_plots": 1, "pipeline_time_limit": 20,
-           "potential_init": {"toward": 0.2, "corridor": 0.2, "lanes": 0.0},
-           "collision_init": {"naive": 0.05}, "scp_dest": None}
+    cfg = _pipeline_cfg(tmp_path)
     log = []
-    root, s = run_pipeline(cfg, 8, workers=1, log=log.append)
-    assert root.endswith(os.path.join("pipeline", "exp_1"))
-    assert {"pipeline_summary.md", "pipeline_summary.png", "pipeline_config.json",
-            "pipeline_scenarios.json.gz"} <= set(os.listdir(root))
-    rd = os.path.join(root, grid.name, "n8")
-    for folder, files in (("training", ["training_search.json", "training_search.png",
-                                        "training_search_potential.csv",
-                                        "training_search_collision.csv"]),
-                          ("test", ["test_per_instance.csv", "test_instance_000_comparison.png"])):
-        names = os.listdir(os.path.join(rd, folder))
-        assert set(files) <= set(names) and all(f.startswith(folder) for f in names)
+    root, rows = run_pipeline(cfg, {"agents": [8], "evals": [6, 8]}, workers=1, log=log.append)
+    assert root.endswith(os.path.join("pipeline", "exp_1")) and len(rows) == 2
+    names = set(os.listdir(root))
+    assert {"pipeline_summary.md", "pipeline_summary.csv", "pipeline_summary.png",
+            "pipeline_config.json", "exp_01_evals-6", "exp_02_evals-8"} <= names
+    assert len([f for f in names if f.startswith("pipeline_scenarios_")]) == 1  # shared
+    for r in rows:
+        rd = os.path.join(root, r["folder"], grid.name, "n8")
+        assert set(os.listdir(rd)) >= {"training", "test"}
+        import importlib.util
+
+        if importlib.util.find_spec("torch"):  # the models are saved as .pt only with torch
+            assert sorted(os.listdir(os.path.join(rd, "models"))) == ["model_collision.pt",
+                                                                       "model_potential.pt"]
+        for folder, files in (("training", ["training_search.json", "training_search.png",
+                                            "training_search_potential.csv",
+                                            "training_search_collision.csv"]),
+                              ("test", ["test_summary.md", "test_summary.png", "test_delays.png",
+                                        "test_per_instance.csv"]
+                               + [f"test_instance_{j:03d}_{kind}.png" for j in range(3)
+                                  for kind in ("comparison", "cbs")])):
+            got = os.listdir(os.path.join(rd, folder))
+            assert set(files) <= set(got) and all(f.startswith(folder + "_") for f in got)
+        assert r["plain_solved"] == 3
+        for key in ("cat", "potential_tb", "potential_tb_cat", "collision_tb",
+                    "collision_tb_cat"):
+            assert r[f"{key}_delay_mismatch"] == 0  # tie-breaking never changes the delay
+        assert r["collision_weighted_delay_mismatch"] >= 0
+    # plain CBS and CBS + CAT on the same scenarios are run once and shared
+    assert rows[0]["plain_mean_time"] == rows[1]["plain_mean_time"]
+    assert rows[0]["cat_mean_time"] == rows[1]["cat_mean_time"]
     md = open(os.path.join(root, "pipeline_summary.md"), encoding="utf-8").read()
-    assert "DIFFERENT" not in md and "identical" in md  # tie-breaking never changes the delay
-    for key in ("cat", "potential_tb", "collision_tb_cat"):
-        assert all(d == 0 for d in s["cbs"][key]["delay_diff"])
-    assert all(d >= 0 for d in s["cbs"]["collision_weighted"]["delay_diff"])
-    assert s["cbs"]["plain"]["solved"] == 3
-    assert run_pipeline(cfg, 8, workers=1, log=lambda *a: None)[0].endswith("exp_2")
+    assert "every tie-break version had the same delay" in md and "exp_02_evals-8" in md
+    one = os.path.join(root, rows[0]["folder"], grid.name, "n8", "test", "test_summary.md")
+    assert "identical" in open(one, encoding="utf-8").read()
+
+    root2, rows2 = run_pipeline(dict(cfg, pipeline_plots=1),
+                                {"agents": [6], "models": ["collision"]}, workers=1,
+                                log=lambda *a: None)
+    assert root2.endswith("exp_2") and "potential_tb_solved" not in rows2[0]
+    tdir = os.path.join(root2, rows2[0]["folder"], grid.name, "n6", "test")
+    assert os.path.exists(os.path.join(tdir, "test_instance_000_cbs.png"))
+    assert not os.path.exists(os.path.join(tdir, "test_instance_001_comparison.png"))
+    with pytest.raises(ValueError):
+        run_pipeline(cfg, {"lr": [1e-3]}, workers=1)
 
 
 def test_pipeline_command_line():
@@ -267,3 +299,19 @@ def test_paired_node_comparison():
     assert (d["n"], d["fewer"], d["same"], d["more"]) == (3, 1, 1, 1)
     assert d["ratio"] == pytest.approx((0.5 * 1.0 * 4.0) ** (1 / 3))
     assert _fmt_paired(d) == "1 / 1 / 1, ×1.26" and _fmt_paired(_paired(run, ref, 0)) == "-"
+
+
+def test_pipeline_command_line_sweep(monkeypatch):
+    import main
+    import mapf_nco.pipeline as pl
+
+    seen = {}
+    monkeypatch.setattr(pl, "run_pipeline", lambda cfg, grid_values, workers=None, animate=False:
+                        seen.update(cfg=cfg, grid=grid_values, animate=animate))
+    main.main(["pipeline", "--agents", "10", "20", "--grid", "seed=0,1", "models=potential,both",
+               "time_limit=30", "--animate", "--workers", "1"])
+    assert seen["grid"] == {"agents": [10, 20], "seed": [0, 1], "models": ["potential", "both"],
+                            "time_limit": [30]}
+    assert seen["animate"] is True
+    main.main(["pipeline", "--workers", "1"])
+    assert seen["grid"] == {"agents": [25]}  # default agent count of the pipeline

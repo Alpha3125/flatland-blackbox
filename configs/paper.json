@@ -38,7 +38,7 @@
   "pipeline_time_limit": 60,
   "pipeline_evals": 150,
   "pipeline_box": {"potential": [-0.3, 0.6], "collision": [-0.2, 0.4]},
-  "pipeline_plots": 3,
+  "pipeline_plots": null,
   "pipeline_variants": ["plain", "cat", "learned", "learned+cat", "weighted"],
 
   "seed": 0,

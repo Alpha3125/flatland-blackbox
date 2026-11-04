@@ -111,7 +111,7 @@ python main.py          # settings from configs/paper.json
   4) Change number of agents
   5) Sweep: generate + queue of experiments + tests
   6) Clear outputs (models, plots, results; generated data is kept)
-  7) Potentials for CBS: learn on PP delay, test CBS with them as tie-breaker
+  7) Potentials for CBS (sweep): learn on PP delay, test CBS with them as tie-breaker
   0) Quit
 ```
 
@@ -152,8 +152,10 @@ python main.py          # settings from configs/paper.json
    - `4` everything in `outputs/`.
 
    The generated scenarios in `data/` are never deleted, so you don't have to regenerate.
-7. **Potentials for CBS** learns the potential and/or collision strengths directly on PP's delay, then tests
-   PP and several versions of CBS on new scenarios. It needs no generated data and no expert. See
+7. **Potentials for CBS** is a sweep like option 5: for every combination of the values you give (agents,
+   models, seeds, settings tried, CBS time limit; several separated by commas), it learns the potential
+   and/or collision strengths directly on PP's delay, then tests PP and several versions of CBS on new
+   scenarios, with all the plots. It needs no generated data and no expert. See
    [Potentials for CBS](#potentials-for-cbs).
 
 ### Option 5: Sweep (everything in one go)
@@ -209,7 +211,8 @@ python main.py test       --agents 50 --num 10            # saved test scenarios
 python main.py test       --agents 50 --random 5 --test_agents 75   # 50-agent models, new 75-agent scenarios
 python main.py evaluate   --agents 50 75 100              # paper's Table 1, no plots
 python main.py pipeline   --agents 25                     # potentials for CBS (both models)
-python main.py pipeline   --agents 30 --model collision --cbs_test 30 --time_limit 30
+python main.py pipeline   --agents 10 20 --grid seed=0,1 models=collision,both   # 8 experiments
+python main.py pipeline   --agents 30 --model collision --cbs_test 30 --time_limit 30 --animate
 python main.py clean      --agents 50 --what agents       # or sweeps / pipeline / all; --yes skips the prompt
 ```
 
@@ -433,7 +436,13 @@ The idea: learn edge costs that keep agents out of each other's way, cheaply wit
 break ties. CBS stays optimal, and fewer conflicts should mean a smaller search. Menu option 7, or
 `python main.py pipeline --agents 25`.
 
-**Steps** (`mapf_nco/pipeline.py`):
+It runs as a sweep: one experiment per combination of the values given. Sweepable: `agents`, `models`
+(potential / collision / both), `seed`, `evals` (strength settings tried per model), `time_limit` (CBS),
+`train`, `cbs_test`. In the menu, type several values separated by commas; on the command line, give several
+`--agents` and `--grid key=v1,v2 ...`. Experiments with the same agents and seed share their scenarios, and
+plain CBS and CBS + CAT (which don't use the learned costs) are run only once on them.
+
+**Each experiment** (`mapf_nco/pipeline.py`):
 
 1. **Scenarios:** new random starts and goals with a fixed PP priority order: training, validation and test.
    No expert is needed.
@@ -471,18 +480,28 @@ break ties. CBS stays optimal, and fewer conflicts should mean a smaller search.
 command for that folder:
 
 ```
-pipeline_summary.md / .png        the tables / plots: learned strengths, PP delays, CBS versions
-pipeline_config.json, pipeline_scenarios.json.gz
-<map>/n<N>/models/model_potential.pt, model_collision.pt   the learned strengths
-<map>/n<N>/training/training_search.png / .json / _<model>.csv   every setting tried
-<map>/n<N>/test/test_per_instance.csv                every method on every test scenario
-<map>/n<N>/test/test_instance_000_comparison.png     plain PP / learned PP / optimal CBS plans
+pipeline_summary.md / .csv / .png     all experiments side by side (strengths, PP delays, CBS solved,
+                                      typical nodes vs plain CBS and vs CBS + CAT); updated after each
+pipeline_config.json                  the settings and the values swept
+pipeline_scenarios_n<N>_seed<S>_*.json.gz   the scenarios
+exp_01_<settings that vary>/<map>/n<N>/
+    models/model_potential.pt, model_collision.pt   the learned strengths
+    training/training_search.png / .json / _<model>.csv   every setting tried (search progress plot)
+    test/test_summary.md / .png       this experiment's tables; PP delays, CBS solved within a given
+                                      time, each scenario's nodes against plain CBS's
+    test/test_delays.png              PP delay on every scenario, learned vs plain, and the changes
+    test/test_per_instance.csv        every method on every test scenario
+    test/test_instance_000_comparison.png   plain PP / learned PP / optimal CBS plans, learned costs
+    test/test_instance_000_cbs.png    every CBS version's plan, with its nodes, time and delay
+    test/test_instance_000_animation.gif    with animations on
+    tensorboard/tensorboard_pipeline/ search progress, summary and plots
 ```
 
-The CBS table gives, per version: scenarios solved, mean time (a timeout counts as the time limit), mean and
+Plots are drawn for every CBS test scenario (`pipeline_plots`: null = all, or a number). The CBS table of an
+experiment gives, per version: scenarios solved, mean time (a timeout counts as the time limit), mean and
 median nodes on the scenarios every version solved, how often it needed fewer / the same / more nodes than
-plain CBS, and scenarios only it or only plain CBS solved. The plot shows PP's delays, the number of scenarios
-solved within a given time, and each scenario's nodes against plain CBS's.
+plain CBS and than CBS + CAT, with the typical ratio (geometric mean), and scenarios only it or only plain CBS
+solved.
 
 **First results** (run in the cloud container, 2 cores; 300 training / 100 validation / 100 test scenarios,
 CBS on the first 40 (20 agents) or 30 (25 agents) test scenarios, 30 s limit; "×" = typical ratio of CBS
@@ -514,7 +533,7 @@ What this says so far:
 
 Settings (`configs/paper.json`, or the menu / command-line options): `pipeline_models`, `pipeline_train`
 (400), `pipeline_val` (100), `pipeline_test` (100), `pipeline_cbs_test` (50), `pipeline_time_limit` (60),
-`pipeline_evals` (150), `pipeline_box` (search range per model), `pipeline_plots` (3), `pipeline_variants`
+`pipeline_evals` (150), `pipeline_box` (search range per model), `pipeline_plots` (null = all), `pipeline_variants`
 (plain, cat, learned, learned+cat, weighted). The starting strengths are `potential_init` / `collision_init`.
 Python CBS is slow beyond about 25 agents; there, the CBS part mostly compares how many scenarios each
 version solves.
@@ -558,7 +577,7 @@ mapf_nco/
   solver_cbs.py         Python CBS: fallback expert, CBS with learned costs (planner cbs), and
                         tie-breaking CBS (plain / conflict-avoidance table / learned costs)
   delay_search.py       potential / collision strengths found by direct search on PP's delay
-  pipeline.py           option 7: potentials for CBS (search, PP and CBS tests, summary)
+  pipeline.py           option 7: potentials for CBS, a sweep (search, PP and CBS tests, plots)
   planners.py           model (edge / potential / potential_edge) and planner (pp / cbs / both) settings, model ids
   potential.py          map features of the potential model (obstructions, single-lane passages, lanes)
   hotspots.py           where collisions were avoided: waits, close calls, naive collisions

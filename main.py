@@ -23,6 +23,7 @@ Or use the commands directly:
     python main.py sweep      --agents 50 --grid model=edge,potential,potential_edge
     python main.py evaluate   --agents 50 75 100                          Table 1, no plots
     python main.py pipeline   --agents 25                                 potentials for CBS
+    python main.py pipeline   --agents 10 20 --grid seed=0,1             4 experiments
     python main.py clean      --agents 20      (or --what sweeps / --what all)
 
 ``--set key=value`` overrides any entry of the config file.
@@ -433,34 +434,43 @@ def menu_clear(cfg, n, info):
 
 def menu_pipeline(cfg, n, info):
     from mapf_nco.pipeline import DEFAULTS, run_pipeline
+    from mapf_nco.sweep import expand_grid
 
-    print("  Potentials for CBS:")
+    print("  Potentials for CBS, a sweep like option 5. Each experiment:")
     print("    1. new random scenarios (no expert needed)")
-    print("    2. learn the potential / collision strengths by searching on PP's delay")
-    print("    3. test PP: plain vs learned costs (delay)")
-    print("    4. test CBS: plain, + conflict-avoidance table, + learned costs as tie-breaker,")
+    print("    2. learns the potential / collision strengths by searching on PP's delay")
+    print("    3. tests PP: plain vs learned costs (delay)")
+    print("    4. tests CBS: plain, + conflict-avoidance table, + learned costs as tie-breaker,")
     print("       and planning on the learned costs (solved, search nodes, time)")
+    print("  with all the plots. Give several values separated by commas to compare them.")
     cfg = dict(cfg)
     d = lambda k: cfg.get(k, DEFAULTS[k])  # noqa: E731
-    m = ask("  Models: potential, collision or both", "both", str,
-            ["potential", "collision", "both"])
-    kinds = ["potential", "collision"] if m == "both" else [m]
+    grid_values = {
+        "agents": _ask_values("  agents", n, int),
+        "models": _ask_values("  models (potential / collision / both)", "both", str),
+        "seed": _ask_values("  random seed", cfg["seed"], int),
+        "evals": _ask_values("  strength settings tried per model", d("pipeline_evals"), int),
+        "time_limit": _ask_values("  CBS time limit per scenario, seconds",
+                                  d("pipeline_time_limit"), float),
+    }
+    if any(m not in ("potential", "collision", "both") for m in grid_values["models"]):
+        print("  models must be potential, collision or both")
+        return
     cfg["pipeline_train"] = ask("  Training scenarios", d("pipeline_train"), int)
     cfg["pipeline_val"] = ask("  Validation scenarios", d("pipeline_val"), int)
     cfg["pipeline_test"] = ask("  Test scenarios (PP)", d("pipeline_test"), int)
-    cfg["pipeline_cbs_test"] = ask("  Of those, solved with CBS (slow)", d("pipeline_cbs_test"),
-                                   int)
-    cfg["pipeline_time_limit"] = ask("  CBS time limit per scenario, seconds",
-                                     d("pipeline_time_limit"), float)
-    cfg["pipeline_evals"] = ask("  Strength settings tried per model", d("pipeline_evals"), int)
-    cfg["seed"] = ask("  Random seed", cfg["seed"], int)
+    cfg["pipeline_cbs_test"] = ask("  Of those, solved with CBS (slow; all get plots)",
+                                   d("pipeline_cbs_test"), int)
+    animate = ask_yes("  Save animations too (slower)?", False)
     workers = ask("  Parallel workers", default_workers(), int)
-    if n > 40:
-        print(f"  Note: with {n} agents plain CBS times out on most scenarios; the CBS part "
-              "then mostly compares how many each version solves.")
+    k = len(expand_grid(grid_values))
+    if max(grid_values["agents"]) > 40:
+        print(f"  Note: with {max(grid_values['agents'])} agents plain CBS times out on most "
+              "scenarios; the CBS part then mostly compares how many each version solves.")
+    print(f"\n  {k} experiment(s).")
     if not ask_yes("  Start?", True):
         return
-    root, _ = run_pipeline(cfg, n, kinds, workers=workers)
+    root, _ = run_pipeline(cfg, grid_values, workers=workers, animate=animate)
     open_file(os.path.join(root, "pipeline_summary.png"))
 
 
@@ -480,7 +490,7 @@ def interactive(config_path):
   4) Change number of agents
   5) Sweep: generate + queue of experiments + tests
   6) Clear outputs (models, plots, results; generated data is kept)
-  7) Potentials for CBS: learn on PP delay, test CBS with them as tie-breaker
+  7) Potentials for CBS (sweep): learn on PP delay, test CBS with them as tie-breaker
   0) Quit""")
         c = ask("Choose", None, int, [0, 1, 2, 3, 4, 5, 6, 7])
         try:
@@ -610,6 +620,10 @@ def parse_args(argv=None):
                    choices=["plain", "cat", "learned", "learned+cat", "weighted"],
                    help="CBS versions (default: all)")
     q.add_argument("--seed", type=int)
+    q.add_argument("--grid", nargs="+", metavar="KEY=V1,V2", default=[],
+                   help="values to compare, e.g. seed=0,1 models=potential,both evals=50,150 "
+                        "time_limit=30,60 (also: train, cbs_test); several --agents also sweep")
+    q.add_argument("--animate", action="store_true")
 
     e = sub.add_parser("evaluate", help="Table 1 over all saved test scenarios, no plots")
     common(e)
@@ -685,10 +699,15 @@ def main(argv=None):
                       args.second_num, animate=args.animate, workers=workers)
 
     if args.command == "pipeline":
-        from mapf_nco.pipeline import run_pipeline
+        from mapf_nco.pipeline import SWEEPABLE, run_pipeline
 
-        for n in agents:
-            run_pipeline(cfg, n, workers=workers)
+        grid_values = {"agents": list(agents)}
+        for item in args.grid:
+            key, _, vals = item.partition("=")
+            if key not in SWEEPABLE:
+                raise SystemExit(f"cannot sweep '{key}'; choose from {', '.join(SWEEPABLE)}")
+            grid_values[key] = [v if key == "models" else json.loads(v) for v in vals.split(",")]
+        run_pipeline(cfg, grid_values, workers=workers, animate=args.animate)
 
     if args.command == "clean":
         from mapf_nco.grid import Grid

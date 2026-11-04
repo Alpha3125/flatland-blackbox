@@ -209,6 +209,55 @@ def plot_comparison(grid, sc, plans, titles, out_path, reference, weights=None, 
     return _save(fig, out_path, dpi=120)
 
 
+def plot_plan_grid(grid, sc, plans, titles, out_path, reference=None, header=None, ncols=4,
+                   hotspots=True):
+    """Several plans of one scenario in a grid of maps (e.g. the CBS versions).
+
+    ``plans[name]`` None = no plan (e.g. timed out): an empty map with its title. Agents
+    whose path differs from ``plans[reference]`` are coloured, the others grey.
+    """
+    import math
+
+    names = list(plans)
+    have = {k: v for k, v in plans.items() if v is not None}
+    if reference in have:
+        changed = changed_agents(have, reference)
+    else:
+        changed = {k: set(range(len(v))) for k, v in have.items()}
+    ncols = max(1, min(ncols, len(names)))
+    nrows = max(1, math.ceil(len(names) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4.6 * ncols, 4.9 * nrows + 1.0),
+                             squeeze=False)
+    naive = None
+    if hotspots and have:
+        from mapf_nco.hotspots import close_calls, gave_way, naive_collisions
+
+        naive = naive_collisions(grid, sc.starts, sc.goals)
+    for ax, name in zip(axes.flat, names):
+        _draw_map(ax, grid)
+        title = titles.get(name, name)
+        if plans[name] is not None:
+            _draw_plans(ax, grid, plans[name], changed.get(name, set()))
+            if naive is not None:
+                gw, cc = gave_way(plans[name]), close_calls(plans[name])
+                _draw_hotspots(ax, grid, {"gave_way": gw[0], "close_call": cc[0],
+                                          "naive": naive[0]})
+                title += f"\ngave way {gw[1]}  |  close calls {cc[1]}"
+        ax.set_title(title, fontsize=9)
+    for ax in list(axes.flat)[len(names):]:
+        ax.axis("off")
+    H = fig.get_figheight()
+    top = (f"Coloured = agents whose path differs from {reference}'s plan, grey = unchanged."
+           if reference in have else "")
+    if naive is not None:
+        top += f"  Naive collisions (same on every map): {naive[1]}."
+        hotspot_legend(fig, y=1 - 0.55 / H)
+    fig.suptitle((header + "\n" if header else "") + top, fontsize=9)
+    fig.subplots_adjust(top=1 - (1.75 if naive is not None else 0.9) / H, hspace=0.32,
+                        wspace=0.05, left=0.02, right=0.98, bottom=0.02)
+    return _save(fig, out_path, dpi=110)
+
+
 def animate_comparison(grid, sc, plans, titles, out_path, fps=4):
     """GIF of all methods side by side, agents moving one step per frame."""
     from matplotlib.animation import FuncAnimation, PillowWriter

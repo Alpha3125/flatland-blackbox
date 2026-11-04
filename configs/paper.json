@@ -14,7 +14,8 @@
   "with_cbs": true,
   "cbs_time_limit": 60,
 
-  "models": ["edge", "gnn"],
+  "model": "edge",
+  "potential_init": {"near": 0.0, "toward": 0.2, "corridor": 0.2, "dead_end": 0.0, "lanes": 0.0},
   "planner": "both",
   "cbs_train_time_limit": 10,
   "epochs": 20,
@@ -22,12 +23,10 @@
   "lr": 0.0005,
   "lam": 1.0,
   "loss_reduction": "mean",
-  "method": "seq_teacher",
   "objective": "usage",
   "makespan_tau": 1.0,
   "makespan_weight": 0.001,
   "w_min": 0.001,
-  "gnn": {"hidden": 64, "num_freqs": 6, "id_dim": 8, "mlp_hidden": 64},
 
   "seed": 0,
   "device": "cpu"

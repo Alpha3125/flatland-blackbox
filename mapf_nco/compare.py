@@ -8,9 +8,9 @@ import time
 
 import numpy as np
 
+from mapf_nco.planners import (KIND_LABELS, LABELS, MODEL_IDS, WEIGHT_LABELS,  # noqa: F401
+                                kind_of, planner_of)
 from mapf_nco.solver_pp import NoSolutionError
-
-from mapf_nco.planners import LABELS, MODEL_IDS, WEIGHT_LABELS, split_id  # noqa: F401 (re-exported)
 
 REF = "PP (orig)"
 CBS_TIMEOUT = "CBS timed out"  # key in the times dict: the live original CBS hit its limit
@@ -19,14 +19,12 @@ CBS_TIMEOUT = "CBS timed out"  # key in the times dict: the live original CBS hi
 def load_models(cfg, grid, n, kinds=MODEL_IDS, log=print):
     """Trained models for ``n`` agents; each gets ``.ckpt_info`` (epoch, config).
 
-    ``kinds``: model ids (edge, gnn = PP; edge_cbs, gnn_cbs = CBS) or plain
-    edge/gnn, which select both planners' models. Missing ones are skipped.
+    ``kinds``: model ids (e.g. edge, potential, potential_edge_cbs). Missing ones are skipped.
     """
     from mapf_nco.paths import checkpoint_path
 
-    ids = [m for m in MODEL_IDS if m in kinds or split_id(m)[0] in kinds]
     models, missing = {}, []
-    for mid in ids:
+    for mid in (m for m in MODEL_IDS if m in kinds):
         ckpt = checkpoint_path(cfg, grid.name, n, mid)
         if os.path.exists(ckpt):
             from mapf_nco.train import load_model  # needs torch only when a model exists
@@ -43,7 +41,7 @@ def load_models(cfg, grid, n, kinds=MODEL_IDS, log=print):
 
 
 def predict(model, sc, w_min):
-    """Edge costs a model gives one scenario, as PP will use them."""
+    """Edge costs a model gives one scenario, as the planner will use them."""
     import torch
 
     from mapf_nco.models import make_batch
@@ -53,31 +51,24 @@ def predict(model, sc, w_min):
     return np.maximum(w, w_min)
 
 
-def model_method(model):
-    return getattr(model, "ckpt_info", {}).get("config", {}).get("method", "static")
-
-
 def plan_all_timed(planner, sc, models, cbs=None):
     """Plans of every method for one scenario, timings, and the models' edge costs.
 
-    Returns (plans, times, weights, seq_weights). A learned PP that fails maps
-    to None. Sequential models (method seq_*) are called before every agent:
-    ``weights`` then holds the mean over agents and ``seq_weights[kind]`` the
-    cost vector each agent planned with (indexed by agent). The
-    original PP runs with explicit unit costs so it uses the same heuristic code
-    path as the learned models (fair timing; the plan is identical to the stored
-    one). EECBS plans come from the dataset. CBS models plan with ``cbs`` (a
-    WeightedCBS); then the original CBS is run here too (unit costs, timed, same
-    time limit) so the times compare fairly: its time is counted even when it
-    times out (``times[CBS_TIMEOUT]`` is then set), exactly like a CBS model's.
-    Otherwise, and on a timeout, the CBS plan comes from the dataset.
+    Returns (plans, times, weights). A learned planner that fails maps to None.
+    The original PP runs with explicit unit costs so it uses the same heuristic
+    code path as the learned model (fair timing; the plan is identical to the
+    stored one). EECBS plans come from the dataset. CBS models plan with ``cbs``
+    (a WeightedCBS); then the original CBS is run here too (unit costs, timed,
+    same time limit) so the times compare fairly: its time is counted even when
+    it times out (``times[CBS_TIMEOUT]`` is then set), exactly like a CBS
+    model's. Otherwise, and on a timeout, the CBS plan comes from the dataset.
     """
     t0 = time.perf_counter()
     plans = {REF: planner.solve(sc.starts, sc.goals, sc.order,
                                 np.ones(planner.grid.num_edges))}
     times = {REF: time.perf_counter() - t0}
-    weights, seq_weights = {}, {}
-    cbs_models = {k: m for k, m in models.items() if split_id(k)[1] == "cbs"}
+    weights = {}
+    cbs_models = {k for k in models if planner_of(k) == "cbs"}
     if cbs is not None and cbs_models:
         t0 = time.perf_counter()
         try:
@@ -87,37 +78,13 @@ def plan_all_timed(planner, sc, models, cbs=None):
         times["CBS"] = time.perf_counter() - t0
     for kind, model in models.items():
         t0 = time.perf_counter()
-        if kind in cbs_models:
-            w = predict(model, sc, planner.w_min)
-            try:
-                plans[LABELS[kind]] = cbs.solve(sc.starts, sc.goals, None, w)
-            except (NoSolutionError, AttributeError):
-                plans[LABELS[kind]] = None
-            times[LABELS[kind]] = time.perf_counter() - t0
-            weights[kind] = w
-            continue
-        if model_method(model) != "static":
-            from mapf_nco.sequential import cost_fn_for, sequential_pp
-
-            fn = cost_fn_for(model, sc)
-            try:
-                paths, W, _ = sequential_pp(planner, sc.starts, sc.goals, sc.order, fn)
-                plans[LABELS[kind]] = paths
-            except NoSolutionError:
-                plans[LABELS[kind]] = None
-                W = []
-            times[LABELS[kind]] = time.perf_counter() - t0
-            if W and all(w is not None for w in W):
-                W = [np.maximum(w, planner.w_min) for w in W]
-                seq_weights[kind] = W
-                weights[kind] = np.mean(W, axis=0)
-            else:  # failed part-way: show the costs of the first agent
-                weights[kind] = predict(model, sc, planner.w_min)
-            continue
         w = predict(model, sc, planner.w_min)
         try:
-            plans[LABELS[kind]] = planner.solve(sc.starts, sc.goals, sc.order, w)
-        except NoSolutionError:
+            if kind in cbs_models:
+                plans[LABELS[kind]] = cbs.solve(sc.starts, sc.goals, None, w)
+            else:
+                plans[LABELS[kind]] = planner.solve(sc.starts, sc.goals, sc.order, w)
+        except (NoSolutionError, AttributeError):  # AttributeError: no CBS planner given
             plans[LABELS[kind]] = None
         times[LABELS[kind]] = time.perf_counter() - t0
         weights[kind] = w
@@ -127,35 +94,51 @@ def plan_all_timed(planner, sc, models, cbs=None):
         plans["CBS"] = sc.cbs_paths
     order = [REF] + [LABELS[k] for k in models] + ["Expert", "CBS"]
     plans = {k: plans[k] for k in order if k in plans}
-    return plans, times, weights, seq_weights
+    return plans, times, weights
 
 
 def hparams_header(models, trained_n):
-    """One-line summary of the training hyperparameters of the loaded models."""
+    """One-line summary of the training hyperparameters of the loaded models.
+
+    A setting that differs between the models is listed per model.
+    """
     if not models:
         return "No trained models: original PP vs EECBS/CBS only"
-    any_info = next(iter(models.values())).ckpt_info
-    c = any_info.get("config", {})
-    obj = c.get("objective", "usage")
-    if obj == "makespan":
-        obj += f" (tau {c.get('makespan_tau', 1.0)})"
-    elif obj == "usage+makespan":
-        obj += f" (tau {c.get('makespan_tau', 1.0)}, weight {c.get('makespan_weight', 0.001)})"
-    meths = sorted({model_method(m) for k, m in models.items() if split_id(k)[1] == "pp"})
-    pls = [p for p in ("pp", "cbs") if any(split_id(k)[1] == p for k in models)]
-    parts = [f"planner {' + '.join(p.upper() for p in pls)}"]
-    if meths:
-        parts.append(f"PP method {'/'.join(meths)}")
-    parts += [ f"objective {obj}", f"trained on {trained_n} agents",
-             f"epochs {c.get('epochs')}", f"batch {c.get('batch_size')}",
-             f"lr {c.get('lr')}", f"lambda {c.get('lam')}",
-             f"loss {c.get('loss_reduction', 'mean')}", f"w_min {c.get('w_min')}",
-             f"val {int(round(100 * c.get('val_fraction', 0.2)))}%", f"seed {c.get('seed')}"]
-    gnn = next((m for k, m in models.items() if split_id(k)[0] == "gnn"), None)
-    if gnn is not None:
-        g = gnn.ckpt_info.get("model_kwargs", {})
-        parts.append(f"GNN hidden {g.get('hidden')}, freqs {g.get('num_freqs')}, "
-                     f"id {g.get('id_dim')}, mlp {g.get('mlp_hidden')}")
+
+    def objective(c):
+        obj = c.get("objective", "usage")
+        if obj == "makespan":
+            obj += f" (tau {c.get('makespan_tau', 1.0)})"
+        elif obj == "usage+makespan":
+            obj += f" (tau {c.get('makespan_tau', 1.0)}, weight {c.get('makespan_weight', 0.001)})"
+        return obj
+
+    configs = {k: m.ckpt_info.get("config", {}) for k, m in models.items()}
+
+    def setting(name, get):
+        vals = {k: get(c) for k, c in configs.items()}
+        if len(set(map(str, vals.values()))) == 1:
+            return f"{name} {next(iter(vals.values()))}"
+        return f"{name} " + ", ".join(f"{LABELS[k]}: {v}" for k, v in vals.items())
+
+    pls = [p for p in ("pp", "cbs") if any(planner_of(k) == p for k in models)]
+    kinds = [KIND_LABELS[k] for k in KIND_LABELS if any(kind_of(m) == k for m in models)]
+    parts = [f"model {' / '.join(kinds)}, planner {' + '.join(p.upper() for p in pls)}",
+             setting("objective", objective), f"trained on {trained_n} agents",
+             setting("epochs", lambda c: c.get("epochs")),
+             setting("batch", lambda c: c.get("batch_size")),
+             setting("lr", lambda c: c.get("lr")), setting("lambda", lambda c: c.get("lam")),
+             setting("loss", lambda c: c.get("loss_reduction", "mean")),
+             setting("w_min", lambda c: c.get("w_min")),
+             setting("val", lambda c: f"{int(round(100 * c.get('val_fraction', 0.2)))}%"),
+             setting("seed", lambda c: c.get("seed"))]
     parts.append("best epoch " + ", ".join(
         f"{LABELS[k]}: {m.ckpt_info.get('epoch')}" for k, m in models.items()))
+    for k, m in models.items():
+        if kind_of(k) == "potential":
+            from mapf_nco.potential import STRENGTHS
+
+            th = m.theta.detach().cpu().numpy()
+            parts.append(f"{LABELS[k]}: " + ", ".join(f"{n} {th[i]:+.2f}"
+                                                       for i, n in enumerate(STRENGTHS)))
     return " | ".join(parts)

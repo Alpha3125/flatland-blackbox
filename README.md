@@ -3,10 +3,12 @@
 A replication of **"Learned Representations Enhance Multi Agent Path Planning"**
 (Marius Captari and Herke van Hoof, ICML 2025 Workshop on Programmatic Representations for Agent Learning).
 
-A neural network predicts a cost for every edge of the MAPF grid. Prioritized Planning (PP) plans on those
-costs, and the network is trained so that PP's plans match expert plans from EECBS. PP is not differentiable,
-so gradients come from black-box differentiation (Pogančić et al., 2019): one extra PP call on perturbed costs
-per scenario.
+A cost is learned for every edge of the MAPF grid (the paper's Edge model). Prioritized Planning (PP) plans on
+those costs, and the costs are trained so that PP's plans match expert plans from EECBS. PP is not
+differentiable, so gradients come from black-box differentiation (Pogančić et al., 2019): one extra PP call on
+perturbed costs per scenario. The paper also has a GNN variant; it is not included here. As an extension, the
+costs can also come from a **potential model (PotP)**: a few learned strengths on map features, such as moving
+towards obstructions or into single-lane passages.
 
 This repository started as a fork of [AI4REALNET/flatland-blackbox](https://github.com/AI4REALNET/flatland-blackbox),
 which applies the same idea to Flatland railway graphs. That Flatland-specific code (rail graphs, proxy nodes,
@@ -20,7 +22,7 @@ city generators, flowtime) has been replaced by the grid MAPF setting the paper 
 | §3.1 edge-usage vector *y* (Eq. 1) | `mapf_nco/metrics.py` → `edge_usage` |
 | §3.1/3.3 PP: space-time A\*, reservation table, learned costs for *g*, unit costs for timing, true-distance heuristic recomputed under the learned weights | `mapf_nco/solver_pp.py` |
 | §3.2 MSE loss on directed usage (Eq. 4), perturbation (Eq. 5), surrogate gradient (Eq. 6) | `mapf_nco/blackbox.py` |
-| §3.3 / §4 Edge model and two-layer GraphSAGE model with an edge MLP | `mapf_nco/models.py` |
+| §3.3 / §4 Edge model: one learned cost per directed edge, shared by all scenarios (the paper's GNN variant is not included) | `mapf_nco/models.py` |
 | Algorithm 1, Adam (lr 5e-4), λ = 1.0, validation-delay checkpointing | `mapf_nco/train.py` |
 | §4 EECBS experts (suboptimality 1.0 for 50 agents, 1.05 for 75/100) | `mapf_nco/solver_eecbs.py`, `mapf_nco/experts.py` |
 | §4 priority order: ascending true distance, otherwise one fixed random permutation | `mapf_nco/scenarios.py` → `assign_priority_order` |
@@ -104,7 +106,7 @@ python main.py          # settings from configs/paper.json
 
 ```
   1) Generate scenarios + EECBS, CBS and PP plans
-  2) Experiment: train the Edge and GNN models (choose hyperparameters)
+  2) Experiment: train a model (Edge / Potential / Potential+Edge; choose hyperparameters)
   3) Test: saved test scenarios, or new random scenarios (comparison plots)
   4) Change number of agents
   5) Sweep: generate + queue of experiments + tests
@@ -119,18 +121,19 @@ python main.py          # settings from configs/paper.json
      instances may have no CBS plan. At 50 agents the expert is already optimal, so it's reused.
 
    For data generated earlier, choose "add missing PP/CBS plans" to keep the EECBS plans and only add the rest.
-2. **Experiment** asks for every hyperparameter (planner, epochs, batch size, learning rate, lambda, loss,
-   w_min, validation fraction, seed and the GNN sizes), trains the Edge model and then the GNN, and opens the
-   loss graphs. It doesn't test. **Planner** picks the downstream algorithm the edge costs are learned for:
-   `pp` (the paper), `cbs`, or `both` (the default), which trains four models: PP (Edge), PP (GNN), CBS (Edge)
-   and CBS (GNN). See [CBS as the downstream planner](#cbs-as-the-downstream-planner).
+2. **Experiment** asks for every hyperparameter (model, planner, epochs, batch size, learning rate, lambda,
+   objective, loss, w_min, validation fraction and seed), trains the model(s) and opens the loss graph. It
+   doesn't test.
+   - **Model** sets how the edge costs are learned: `edge` (the paper, the default), `potential`, or
+     `potential_edge`. See [Potential-based edge costs](#potential-based-edge-costs-potp).
+   - **Planner** picks the downstream algorithm the costs are learned for: `pp` (the paper), `cbs`, or `both`
+     (the default), a separate model for each. See [CBS as the downstream planner](#cbs-as-the-downstream-planner).
 3. **Test** asks whether to use the saved test scenarios or new random ones. For new ones it also asks the number
    of agents, which can differ from the training count, then solves them with EECBS and CBS on the spot. Every
    test replaces `test/`. Each `comparison.png` has three parts:
    - **Header:** the training hyperparameters and the best epoch.
-   - **Top row:** the plans of PP (orig), PP (Edge), PP (GNN), EECBS and CBS.
-   - **Bottom row:** the edge costs each model gives that scenario, as a blue (cheaper) to red (dearer)
-     gradient.
+   - **Top row:** the plans of PP (orig), PP (Edge), CBS (Edge) if trained, EECBS and CBS.
+   - **Bottom row:** each model's learned edge costs, as a blue (cheaper) to red (dearer) gradient.
 6. **Clear outputs** deletes results, after a y/N confirmation (default no):
    - `1` the models, plots and tests for the current agent count (`outputs/<map>/n<N>/`);
    - `2` all sweeps (`outputs/sweeps/`);
@@ -141,10 +144,9 @@ python main.py          # settings from configs/paper.json
 ### Option 5: Sweep (everything in one go)
 
 A sweep generates the data if needed, then runs a queue of experiments. For each hyperparameter you can give
-several values separated by commas, e.g. method `static, seq_blackbox, seq_teacher` and learning rate
-`1e-4, 5e-4`, and it runs every combination (6 experiments here). Every experiment uses the agent count you
-selected. Each experiment:
-- trains the Edge and GNN models from scratch;
+several values separated by commas, e.g. planner `pp, cbs` and learning rate `1e-4, 5e-4`, and it runs every
+combination (4 experiments here). Every experiment uses the agent count you selected. Each experiment:
+- trains the Edge model from scratch, for each planner it uses;
 - tests them on the same saved test scenarios (you choose how many);
 - optionally (answer **y**; the default is no) also tests them on a second set of new random scenarios with a
   different agent count. That set is generated once and shared, so experiments are compared fairly.
@@ -154,7 +156,7 @@ deleting `exp_2` the next sweep is `exp_2` again. The agent count and settings a
 - **`sweep_summary.md` / `.csv`:** one row per experiment with its settings, best epochs, validation delay and both
   tests' delays. It's updated after every experiment, so a long sweep can be checked while it runs.
 - **`sweep_summary.png`:** a bar chart of every experiment on both test sets, against original PP and EECBS.
-- **`exp_01_method-static_lr-0.0001/`, `exp_02_…/`, …:** one folder per experiment, named after the settings
+- **`exp_01_planner-pp_lr-0.0001/`, `exp_02_…/`, …:** one folder per experiment, named after the settings
   that vary in the sweep. Each holds that experiment's models, loss graphs, TensorBoard logs and comparison plots
   (`test/` and `test_n<M>/`).
 
@@ -164,8 +166,8 @@ The same from the command line:
 python main.py sweep --agents 50 --grid lr=1e-4,5e-4 lam=0.5,1,2 --num 25    # add --second_agents 25 for a second test set
 ```
 
-Sweepable: planner, method, objective, makespan_tau, makespan_weight, epochs, batch_size, lr, lam, loss_reduction, w_min, val_fraction, seed, gnn_hidden,
-gnn_num_freqs, gnn_id_dim, gnn_mlp_hidden.
+Sweepable: model, planner, objective, makespan_tau, makespan_weight, epochs, batch_size, lr, lam, loss_reduction, w_min,
+val_fraction, seed.
 
 ## Commands (same steps, for scripts)
 
@@ -173,6 +175,8 @@ gnn_num_freqs, gnn_id_dim, gnn_mlp_hidden.
 python main.py generate   --agents 50                     # add --augment to keep existing data
 python main.py experiment --agents 50 --epochs 30 --lr 5e-4 --lam 1.0 --batch_size 8
 python main.py experiment --agents 20 --planner cbs      # only the CBS models (pp / cbs / both)
+python main.py experiment --agents 50 --model potential_edge --planner pp
+python main.py sweep      --agents 50 --grid model=edge,potential,potential_edge --num 25   # compare them
 python main.py test       --agents 50 --num 10            # saved test scenarios
 python main.py test       --agents 50 --random 5 --test_agents 75   # 50-agent models, new 75-agent scenarios
 python main.py evaluate   --agents 50 75 100              # paper's Table 1, no plots
@@ -188,9 +192,10 @@ data/scenarios/random-32-32-20/n50/
     train.json.gz, test.json.gz     generated INPUT data: scenarios, PP priority orders,
                                     and the EECBS, PP and CBS plans
 outputs/random-32-32-20/n50/
-    checkpoints/edge.pt, gnn.pt     trained PP models (the epoch with the best validation delay,
-                                    or validation makespan for a makespan objective)
-    checkpoints/edge_cbs.pt, gnn_cbs.pt   trained CBS models (planner cbs or both)
+    checkpoints/<model>.pt          trained PP models: edge.pt, potential.pt, potential_edge.pt (the
+                                    epoch with the best validation delay, or makespan for a makespan
+                                    objective)
+    checkpoints/<model>_cbs.pt      the same for CBS (planner cbs or both)
     training/curves.png             all models together: loss (formula in the title) and
                                     validation metric, with the selected epochs starred
     training/history.csv            the numbers behind the graph, one row per model and epoch
@@ -202,7 +207,7 @@ outputs/random-32-32-20/n50/
                                     PP failures)
         per_instance.csv            delay and makespan per instance and method
         instance_000/comparison.png header: hyperparameters; top: PP (orig) | PP (Edge) |
-                                    PP (GNN) | EECBS | CBS; bottom: model edge costs
+                                    [CBS (Edge)] | EECBS | CBS; bottom: learned edge costs
         instance_000/*.png          each method on its own (+ animation.gif with --animate)
 outputs/sweeps/exp_<k>/            option 5 (sweep): sweep_summary.*, exp_01_<settings>/ ...
 outputs/results/table1.md           from `main.py evaluate`
@@ -235,40 +240,64 @@ tensorboard --logdir outputs        # then open http://localhost:6006
   e.g. 56.20 vs 23.96 → 134.6 %.
 - Agents stay at their goal after arriving. Sum-of-costs counts each agent's final arrival time.
 
-## Sequential cost prediction (Gelato-style extension)
+## Potential-based edge costs (PotP)
 
-Setting `method` chooses how the costs are predicted (default: `seq_teacher`; choose `static` to reproduce the
-paper):
+Instead of one free cost per edge, the potential model builds the costs from a few properties of the map. The
+assumption is that edges *towards obstructions* and into *single-lane passages* should cost more, and that
+one-way lanes may help. For a move u → v (waits keep cost 1):
 
-| method | costs | training |
+```
+w = 1 + θ_near·near(v) + θ_toward·max(0, near(v) − near(u)) + θ_corridor·corridor(u→v) + θ_dead_end·dead_end(v)
+      + lane_row[r]·(±1 east/west)  or  lane_col[c]·(±1 south/north)
+```
+
+- **`near(v) = 1/d(v)`**, with d(v) the number of steps from v to the nearest blocked cell or the map border. This
+  is a repulsive potential, as in potential-field planning. `toward` is how much a move climbs it.
+- **`corridor`** is 1 when both cells beside v, across the direction of the move, are blocked: a single-lane
+  passage where agents can't pass each other. **`dead_end`** is 1 when v has only one free neighbour.
+- **Lanes** are one-way preferences: one learned value per row and per column makes one direction along it
+  cheaper and the opposite one dearer.
+- **Parameters:** that's 4 strengths + 32 + 32 lane values = 68, against 3,359 for the Edge model, so it can't
+  memorise a small training set. It is trained with the same black-box gradient
+  (`mapf_nco/potential.py`, `PotentialModel` in `mapf_nco/models.py`). The training log prints the strengths
+  after every epoch, and test plots list them in the header.
+
+Three choices for `model`:
+
+| model | what is trained |
+|---|---|
+| `edge` | the paper's Edge model, starting from cost 1 everywhere |
+| `potential` | the 68 potential parameters, starting from `potential_init` |
+| `potential_edge` | first `potential`, then the Edge model starting from the trained potential costs and adjusted per edge (both checkpoints are kept) |
+
+**Starting strengths** (`potential_init` in `configs/paper.json`; the experiment menu asks for them): toward 0.2,
+corridor 0.2, the rest 0. They come from a check with no training, PP on random scenarios with and without
+these costs (no expert involved):
+
+| added cost | 50 agents (120 scenarios) | 75 agents (60 scenarios) |
 |---|---|---|
-| `static` (paper) | one cost map per scenario, predicted before planning | black-box gradient through PP |
-| `seq_blackbox` | **recomputed before each agent** from the reservations of the agents already planned | black-box gradient through the whole sequential PP, per agent |
-| `seq_teacher` | recomputed before each agent (same model) | Gelato-style teacher forcing on partial EECBS plans |
+| toward 0.2 | delay −5.7 % (better in 70, worse in 38) | |
+| toward 0.2 + corridor 0.3 | −6.8 % (70 / 40) | −7.7 % (43 / 12) |
+| toward 0.2 + corridor 0.1 | −7.2 % (78 / 33) | −6.0 % (42 / 15) |
+| corridor 1.0 | +12.5 % (too strong: detours) | |
+| alternating one-way lanes 0.3 | +80 % (forced detours) | |
 
-This follows Gelato (graph edit distance via autoregressive neural combinatorial optimisation, ICLR 2026): every
-decision is conditioned on the partial solution built so far. The priority order stays fixed.
+So steering agents away from obstructions and out of single-lane passages helps PP even before training. Fixed
+one-way lanes hurt, which is why the lanes start at 0 and only change through training. With non-unit costs PP
+fails on about 1 in 100 scenarios; those count as failures and fall back to the original PP plan.
 
-- **Inputs:** before agent k plans, the GNN gets 7 extra values per cell describing the reservations of agents
-  1…k−1: how often the cell is reserved, the earliest and latest reserved time, whether an agent is parked there
-  for good, the progress k/n, and the current agent's start and goal (`mapf_nco/sequential.py`). These channels
-  start at zero effect, so a fresh sequential model behaves exactly like original PP.
-- **`seq_blackbox`:** runs sequential PP and perturbs every agent's costs (Eq. 5). It reruns PP with those
-  per-agent costs, and agent k's gradient is −(y_k − y_k′)/λ, back-propagated through the k-th model call.
-- **`seq_teacher`:** for each agent k, the reservations come from EECBS's paths for agents 1…k−1. The model is
-  trained so that agent k's search returns EECBS's path for agent k, using the same loss and black-box gradient on
-  that single step.
-  - EECBS's paths are collision-free with each other, so the target is always reachable. If every step is right,
-    sequential PP reproduces the EECBS plan exactly; this mirrors Gelato's training on partial optimal solutions.
-  - The training log shows the share of steps that already reproduce the expert's path.
-  - The objective setting doesn't change the target; it only affects which epoch is kept.
-- **Edge model:** only the GNN reads the reservations. The Edge model ignores them, so under `seq_*` it is still one
-  cost map, trained with the per-step signals.
-- **Plots:** testing a sequential model adds `cost_evolution_gnn.png` to every instance folder. It shows the cost
-  map before selected agents in priority order, the paths already reserved, the agent being planned, and a final
-  panel of how much each edge's cost varies across agents. With `--animate` it also writes a GIF that steps
-  through every agent.
-- **Comparing the three:** `python main.py sweep --agents 50 --grid method=static,seq_blackbox,seq_teacher`
+Two things to keep in mind when reading the results:
+
+- **The training loss is a poor guide for this model.** The paper's loss measures which of many equally short
+  routes each agent takes, compared with EECBS. The potential model changes costs across the whole map at once,
+  so it can't copy EECBS route by route. Its starting strengths roughly double that loss even where they lower
+  the delay. On single scenarios, the black-box gradient still points the right way: it ends far below the
+  same run with the gradient's sign flipped. But the loss often doesn't fall below its starting value. The best
+  epoch is chosen by validation delay, which is what matters.
+- **Epoch 0 is the starting strengths, not the original PP.** For the Edge model, epoch 0 is the original PP, so
+  the saved model can never be worse than PP on validation. For `potential` and `potential_edge` it can; the
+  training log then says so ("the selected model is worse than the original PP on validation"). With small
+  datasets (a dozen validation scenarios) this is mostly noise; compare on 50+ test scenarios.
 
 ## Makespan objective (extension, not in the paper)
 
@@ -297,14 +326,13 @@ optimal in about half the scenarios, so gains are small by nature. In a quick ch
 
 ## CBS as the downstream planner
 
-The paper only uses the learned costs inside PP. With `planner` set to `cbs` (or `both`, the default), the same
-Edge and GNN models are also trained for **CBS**, as separate models (`edge_cbs.pt`, `gnn_cbs.pt`).
+The paper only uses the learned costs inside PP. With `planner` set to `cbs` (or `both`, the default), the Edge
+model is also trained for **CBS**, as a separate model (`edge_cbs.pt`).
 
 - **How CBS uses the costs:** the low-level search adds up the learned cost of every move and wait, and the
   high-level search expands the node with the smallest total learned cost. So CBS returns the plan that
   minimises Σₑ wₑ·yₑ. Every action still takes one timestep. This is `WeightedCBS` in `mapf_nco/solver_cbs.py`.
 - **Gradient:** the same black-box rule as for PP (two CBS calls per scenario). Only the planner differs.
-- **Method:** CBS plans all agents together, so the sequential methods don't apply; CBS models always use `static`.
 - **Time limit:** each CBS call during training stops after `cbs_train_time_limit` seconds (default 10). A run that
   times out gives no gradient, and in validation and testing it falls back to the original CBS plan and counts as
   a failure. Python CBS is practical up to roughly 20-30 agents on random-32-32-20, not at 50-100.
@@ -315,7 +343,7 @@ Edge and GNN models are also trained for **CBS**, as separate models (`edge_cbs.
   fewer CBS high-level nodes. The `makespan` objective gives CBS something to improve, because CBS minimises the
   sum of costs, not the makespan.
 - **Testing:** when CBS models are loaded, the original CBS is also run live with the same time limit, so the
-  times in the table compare fairly. The table gets CBS (Edge) and CBS (GNN) columns.
+  times in the table compare fairly. The table gets a CBS (Edge) column.
 
 ## Choices where the paper leaves details open
 
@@ -333,10 +361,6 @@ These are documented so they can be changed if the authors clarify them:
 - **PP failures with learned weights.** In training, a scenario whose forward or perturbed PP call fails gets a
   zero gradient. In validation and testing it falls back to the original PP plan and is counted in the logs and
   results. The paper doesn't say how it handles this case.
-- **GNN inputs.** Node features are start and goal counts (the demand signal), sinusoidal (row, col) embeddings,
-  node degree (local obstacle context) and agent-ID embeddings. The "agent ID" is the agent's rank in the PP
-  priority order, embedded at its start and its goal node. The edge MLP's last layer starts at zero, so training
-  begins from exactly *w* = 1, i.e. the original PP, just like the Edge model.
 - **w_min = 1e-3.** Predicted costs are clamped to this value before planning, because Dijkstra and A\* need
   strictly positive costs.
 - **The scale of the perturbation.** With the mean-reduced loss (Eq. 4), λ·∂L/∂ŷ is about 2/M ≈ 6e-4 per edge.
@@ -357,12 +381,12 @@ mapf_nco/
   solver_pp.py          Prioritized Planning with learned edge costs
   solver_eecbs.py       wrapper around the EECBS binary
   solver_cbs.py         Python CBS: fallback expert, and CBS with learned costs (planner cbs)
-  planners.py           planner setting (pp / cbs / both) and model ids
+  planners.py           model (edge / potential / potential_edge) and planner (pp / cbs / both) settings, model ids
+  potential.py          map features of the potential model (obstructions, single-lane passages, lanes)
   blackbox.py           black-box gradient through PP
-  models.py             Edge and GraphSAGE models
+  models.py             the Edge model and the potential model
   compare.py / viz.py    test helpers, pictures, animations, training curves
   sweep.py              option 5: queue of experiments, shared second test set, summary
-  sequential.py         costs recomputed before each agent (seq_blackbox / seq_teacher)
   paths.py / tb.py       output folder layout, TensorBoard logging
   train.py / evaluate.py / experts.py / metrics.py
 scripts/build_eecbs.sh  builds EECBS into third_party/

@@ -212,20 +212,31 @@ def loss_title(refs, reduction):
     return "Training loss   " + LOSS_FORMULA.get(reduction, "")
 
 
-MODEL_COLORS = {"edge": ("#4292c6", "#c6dbef"), "gnn": ("#ec7014", "#fdd0a2"),
-                "edge_cbs": ("#238b45", "#c7e9c0"), "gnn_cbs": ("#88419d", "#dadaeb")}
-RUN_LABELS = {"edge": "PP (Edge)", "gnn": "PP (GNN)", "edge_cbs": "CBS (Edge)",
-              "gnn_cbs": "CBS (GNN)"}
+from mapf_nco.planners import LABELS as RUN_LABELS  # noqa: E402  model id -> "PP (Edge)" etc.
+
+MODEL_COLORS = {  # model id -> (dark, light)
+    "edge": ("#4292c6", "#c6dbef"), "potential": ("#fd8d3c", "#fdd0a2"),
+    "potential_edge": ("#d62728", "#f4a6a6"), "edge_cbs": ("#17becf", "#a8e6ee"),
+    "potential_cbs": ("#8c564b", "#d7c0bb"), "potential_edge_cbs": ("#e377c2", "#f6c9e9"),
+}
 
 
-def plot_training_curves(runs, n, out_path):
+def plot_training_curves(runs, n, out_path, current=None):
     """All models' training together: loss (left) and the validation metric (right).
 
     ``runs``: {model id: {history, batch_losses, refs, best_epoch, reduction}}, model
-    ids edge / gnn (PP) and edge_cbs / gnn_cbs (CBS).
+    ids as in mapf_nco.planners (edge, potential, ..., potential_edge_cbs). Only runs trained with the same objective as
+    ``current`` (the run just trained) are drawn, so the axes mean one thing; the
+    others are named in the title.
     """
+    hidden = []
+    if current in runs:
+        obj = runs[current]["refs"].get("objective", "usage")
+        hidden = [k for k, r in runs.items() if r["refs"].get("objective", "usage") != obj]
+        runs = {current: runs[current], **{k: r for k, r in runs.items()
+                                           if k != current and k not in hidden}}
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(13, 5))
-    titles, ref_drawn = [], set()
+    ref_drawn = set()
     for kind, r in runs.items():
         dark, light = MODEL_COLORS.get(kind, ("black", "gray"))
         name = RUN_LABELS.get(kind, kind)
@@ -254,7 +265,6 @@ def plot_training_curves(runs, n, out_path):
             ref_drawn.add(ekey)
             a2.axhline(refs["expert"], color="green", ls=":",
                        label=f"{refs.get('expert_name', 'EECBS')} ({refs['expert']:.2f})")
-        titles.append(f"{name}: method {refs.get('method', 'static')}")
     first = next(iter(runs.values()))
     metric = first["refs"].get("metric", "delay")
     a1.set_xlabel("epoch")
@@ -269,14 +279,16 @@ def plot_training_curves(runs, n, out_path):
     a2.grid(alpha=0.3)
     a2.legend(fontsize=8)
     obj = first["refs"].get("objective", "usage")
-    fig.suptitle(f"{n} agents, objective {obj}  |  " + "  |  ".join(titles), fontsize=10)
+    note = ("  (not shown, trained with another objective: "
+            + ", ".join(RUN_LABELS.get(k, k) for k in hidden) + ")") if hidden else ""
+    fig.suptitle(f"{n} agents, objective {obj}  |  "
+                 + ", ".join(RUN_LABELS.get(k, k) for k in runs) + note, fontsize=10)
     fig.tight_layout()
     return _save(fig, out_path, dpi=130)
 
 
-METHOD_COLORS = {"PP (orig)": "#969696", "PP (Edge)": "#4292c6", "PP (GNN)": "#ec7014",
-                 "CBS (Edge)": "#238b45", "CBS (GNN)": "#88419d",
-                 "Expert": "#41ab5d", "CBS": "#6a51a3"}
+METHOD_COLORS = {"PP (orig)": "#969696", "Expert": "#41ab5d", "CBS": "#6a51a3",
+                 **{RUN_LABELS[m]: c[0] for m, c in MODEL_COLORS.items()}}
 
 
 def plot_test_summary(per_instance, methods, out_path, title, expert_name="EECBS"):
@@ -293,7 +305,8 @@ def plot_test_summary(per_instance, methods, out_path, title, expert_name="EECBS
         known = [v for v in vals if v is not None]
         vals = [np.nan if v is None else v for v in vals] + [np.mean(known) if known else np.nan]
         ax.bar(x + (j - (len(methods) - 1) / 2) * width, vals, width,
-               label=expert_name if m == "Expert" else m, color=METHOD_COLORS.get(m))
+               label=expert_name if m == "Expert" else "CBS (optimal)" if m == "CBS" else m,
+               color=METHOD_COLORS.get(m))
     ax.axvline(k - 0.5, color="black", lw=0.8)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=8)
@@ -338,75 +351,3 @@ def plot_sweep_summary(rows, tags, out_path):
     fig.tight_layout()
     return _save(fig, out_path, dpi=130)
 
-
-def _evolution_panels(grid, sc, W, paths, picks, axes, norm):
-    import numpy as np
-
-    order = list(sc.order)
-    for ax, k in zip(axes, picks):
-        i = order[k]
-        draw_weights(ax, grid, W[i], norm)
-        for j in order[:k]:  # agents already planned (their reservations)
-            xs, ys = _xy(grid, paths[j])
-            ax.plot(xs, ys, color="black", lw=0.7, alpha=0.6, zorder=3)
-        if paths[i] is not None:
-            xs, ys = _xy(grid, paths[i])
-            ax.plot(xs, ys, color="lime", lw=2.2, zorder=4)
-        (sr, scol), (gr, gc) = grid.cell(sc.starts[i]), grid.cell(sc.goals[i])
-        ax.scatter([scol], [sr], color="lime", marker="o", s=40, edgecolors="black", zorder=5)
-        ax.scatter([gc], [gr], color="lime", marker="*", s=110, edgecolors="black", zorder=5)
-        d = np.abs(np.asarray(W[i]) - np.asarray(W[order[0]])).mean()
-        ax.set_title(f"before agent #{k + 1} (id {i}); mean |w - w_first| {d:.3f}", fontsize=9)
-
-
-def plot_cost_evolution(grid, sc, W, paths, out_path, title, max_panels=8):
-    """How a sequential model's costs change from agent to agent.
-
-    Panels: the cost map used by selected agents in priority order (gradient,
-    blue = cheaper, red = dearer than 1), with the paths already reserved in
-    black and the current agent's path in green. The last panel shows how much
-    each edge's cost varies across all agents (standard deviation).
-    """
-    import numpy as np
-    from matplotlib.colors import Normalize
-
-    n = len(sc.order)
-    picks = sorted(set(np.linspace(0, n - 1, min(max_panels - 1, n)).round().astype(int)))
-    cols = 4
-    rows = int(np.ceil((len(picks) + 1) / cols))
-    fig, axes = plt.subplots(rows, cols, figsize=(4.4 * cols, 4.6 * rows + 0.5), squeeze=False)
-    flat = list(axes.flat)
-    norm = weight_norm([W[i] for i in sc.order])
-    _evolution_panels(grid, sc, W, paths, picks, flat, norm)
-    std = np.std(np.stack(W), axis=0)
-    ax = flat[len(picks)]
-    vals = draw_weights(ax, grid, std, Normalize(0, max(float(std.max()), 1e-9)), cmap="viridis")
-    ax.set_title(f"std of each cost across agents (max {vals.max():.3f})", fontsize=9)
-    for a in flat[len(picks) + 1:]:
-        a.axis("off")
-    fig.subplots_adjust(top=0.9, hspace=0.15, wspace=0.05, left=0.02, right=0.9, bottom=0.02)
-    cax = fig.add_axes([0.925, 0.15, 0.012, 0.7])
-    cb = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap="coolwarm"), cax=cax)
-    cb.set_label("edge cost (blue cheaper, red dearer than 1)")
-    fig.suptitle(title + "\nblack: paths already reserved; green: the agent being planned",
-                 fontsize=10)
-    return _save(fig, out_path, dpi=110)
-
-
-def animate_cost_evolution(grid, sc, W, paths, out_path, fps=3):
-    """GIF: the cost map before each agent in priority order."""
-    from matplotlib.animation import FuncAnimation, PillowWriter
-
-    norm = weight_norm([W[i] for i in sc.order])
-    fig, ax = plt.subplots(figsize=(6, 6.3))
-
-    def frame(k):
-        ax.clear()
-        _evolution_panels(grid, sc, W, paths, [k], [ax], norm)
-        return []
-
-    anim = FuncAnimation(fig, frame, frames=len(sc.order), blit=False)
-    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-    anim.save(out_path, writer=PillowWriter(fps=fps))
-    plt.close(fig)
-    return out_path

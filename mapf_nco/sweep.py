@@ -1,8 +1,8 @@
 """Sweep: one dataset, a queue of experiments, and the same tests for each.
 
 For every combination of the hyperparameter values given (a grid search), the
-Edge and GNN models are trained from scratch, for PP, CBS or both (``planner``),
-and then tested on
+chosen model (``model``: edge / potential / potential_edge) is trained from
+scratch, for PP, CBS or both (``planner``), and then tested on
 
   1. the saved test scenarios (same agent count as training), and
   2. optionally, a second set of new random scenarios with a different agent
@@ -31,17 +31,16 @@ import re
 import time
 
 from mapf_nco.grid import Grid
-from mapf_nco.planners import model_ids, training_runs
+from mapf_nco.planners import KIND_LABELS, MODEL_IDS, kind_of, model_ids, planner_of, training_runs
 from mapf_nco.scenarios import load_dataset, save_dataset
 
-# Hyperparameters that can be swept; "gnn_*" map to cfg["gnn"][*].
-SWEEPABLE = ("planner", "method", "objective", "makespan_tau", "makespan_weight", "epochs", "batch_size", "lr",
-             "lam", "loss_reduction", "w_min", "val_fraction", "seed", "gnn_hidden", "gnn_num_freqs", "gnn_id_dim", "gnn_mlp_hidden")
+# Hyperparameters that can be swept.
+SWEEPABLE = ("model", "planner", "objective", "makespan_tau", "makespan_weight", "epochs", "batch_size",
+             "lr", "lam", "loss_reduction", "w_min", "val_fraction", "seed")
 
 
 _SHORT = {"loss_reduction": "loss", "makespan_tau": "tau", "makespan_weight": "mw",
-          "batch_size": "batch", "val_fraction": "val", "gnn_hidden": "hidden",
-          "gnn_num_freqs": "freqs", "gnn_id_dim": "id", "gnn_mlp_hidden": "mlp"}
+          "batch_size": "batch", "val_fraction": "val"}
 
 
 def _short(key):
@@ -80,15 +79,7 @@ def expand_grid(grid_values):
 
 
 def apply_settings(cfg, settings):
-    cfg = dict(cfg)
-    gnn = dict(cfg.get("gnn", {}))
-    for k, v in settings.items():
-        if k.startswith("gnn_"):
-            gnn[k[4:]] = v
-        else:
-            cfg[k] = v
-    cfg["gnn"] = gnn
-    return cfg
+    return {**cfg, **settings}
 
 
 def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=None,
@@ -129,7 +120,7 @@ def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=
         row = {"experiment": name, **settings}
         t0 = time.time()
         for kind, planner in training_runs(ecfg):
-            train(ecfg, n, kind, workers=workers, log=log, planner=planner)
+            train(ecfg, n, planner, workers=workers, log=log, kind=kind)
         ids = model_ids(ecfg)
         s1 = test_saved(ecfg, n, test_count, ids, plots=True, animate=animate, log=log)
         summaries = [s1]
@@ -140,7 +131,7 @@ def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=
                                       out_name=f"test_n{second_n}"))
         row.update(_best_epochs(ecfg, grid, n, ids))
         for tag, s in zip(tags, summaries):
-            for m in ("orig", "edge", "gnn", "cbs", "edge_cbs", "gnn_cbs"):
+            for m in ("orig", "cbs") + MODEL_IDS:
                 if f"{m}_delay" not in s:
                     continue
                 row[f"{tag}_{m}_delay"] = round(s.get(f"{m}_delay", float("nan")), 2)
@@ -175,18 +166,19 @@ def _best_epochs(cfg, grid, n, ids):
 
 
 def _write_summary(root, rows, tags, ename):
+    if ename == "CBS":  # Python CBS as the expert: don't confuse it with the original-CBS column
+        ename = "CBS (expert)"
     keys = list(dict.fromkeys(k for r in rows for k in r))
     with open(os.path.join(root, "sweep_summary.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=keys)
         w.writeheader()
         w.writerows(rows)
     settings = [k for k in keys if k in SWEEPABLE]
-    nan = float("nan")
-    ids = [m for m in ("edge", "gnn", "edge_cbs", "gnn_cbs")
+    ids = [m for m in MODEL_IDS
            if any(f"{m}_best_epoch" in r for r in rows)]
-    names = {"edge": "PP Edge", "gnn": "PP GNN", "edge_cbs": "CBS Edge", "gnn_cbs": "CBS GNN"}
-    pp = [m for m in ("edge", "gnn") if m in ids]
-    cbs = [m for m in ("edge_cbs", "gnn_cbs") if m in ids]
+    names = {m: f"{planner_of(m).upper()} {KIND_LABELS[kind_of(m)]}" for m in MODEL_IDS}
+    pp = [m for m in ids if planner_of(m) == "pp"]
+    cbs = [m for m in ids if planner_of(m) == "cbs"]
     groups = []  # (column title, per-tag keys)
     if pp:
         groups.append(("PP / " + " / ".join(names[m] for m in pp) + f" / {ename}",
@@ -209,7 +201,7 @@ def _write_summary(root, rows, tags, ename):
         for what in ("delay", "makespan"):
             for tag in tags:
                 for _, cols in groups:
-                    cells.append(" / ".join(str(r.get(f"{tag}_{m}_{what}", nan)) for m in cols))
+                    cells.append(" / ".join(str(r.get(f"{tag}_{m}_{what}", "-")) for m in cols))
         cells.append(str(r["minutes"]))
         lines.append("| " + " | ".join(cells) + " |")
     with open(os.path.join(root, "sweep_summary.md"), "w", encoding="utf-8") as f:

@@ -2,8 +2,8 @@
 
     data/scenarios/<map>/n<N>/{train,test}.json.gz     generated inputs (scenarios + EECBS plans)
     outputs/<map>/n<N>/
-        checkpoints/{edge,gnn}.pt                      trained PP models (best validation epoch)
-        checkpoints/{edge,gnn}_cbs.pt                  trained CBS models
+        checkpoints/edge.pt                            trained PP Edge model (best validation epoch)
+        checkpoints/edge_cbs.pt                        trained CBS Edge model
         training/                                      curves.png (all models together),
                                                        history.csv, history.json
         tensorboard/<model>/, tensorboard/test/        TensorBoard logs

@@ -14,7 +14,7 @@ def test_second_agent_count():
     assert second_agent_count(20, cfg) == 100  # below 50: test on the largest count
 
 
-def test_apply_settings_routes_gnn_keys():
-    cfg = apply_settings({"lr": 1.0, "gnn": {"hidden": 64, "id_dim": 8}},
-                         {"lr": 0.5, "gnn_hidden": 32})
-    assert cfg["lr"] == 0.5 and cfg["gnn"] == {"hidden": 32, "id_dim": 8}
+def test_apply_settings_overrides_only_given_keys():
+    base = {"lr": 1.0, "lam": 2.0}
+    cfg = apply_settings(base, {"lr": 0.5, "planner": "cbs"})
+    assert cfg == {"lr": 0.5, "lam": 2.0, "planner": "cbs"} and base["lr"] == 1.0

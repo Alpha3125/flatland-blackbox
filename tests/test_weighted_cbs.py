@@ -6,7 +6,7 @@ import numpy as np
 
 from mapf_nco.blackbox import blackbox_step
 from mapf_nco.metrics import edge_usage, sum_of_costs, validate_solution
-from mapf_nco.planners import model_ids, planners_of, split_id, training_runs
+from mapf_nco.planners import model_id, model_ids, planner_of, planners_of
 from mapf_nco.scenarios import assign_priority_order, make_rng, random_scenario
 from mapf_nco.solver_cbs import WeightedCBS, solve_cbs
 from mapf_nco.solver_pp import NoSolutionError, PrioritizedPlanner
@@ -91,7 +91,8 @@ def test_blackbox_through_cbs_moves_towards_expert(grid):
 
 def test_planner_setting():
     assert planners_of("both") == ["pp", "cbs"]
-    assert training_runs({"planner": "cbs"}) == [("edge", "cbs"), ("gnn", "cbs")]
-    assert model_ids({"planner": "both"}) == ["edge", "gnn", "edge_cbs", "gnn_cbs"]
-    assert model_ids({}) == ["edge", "gnn", "edge_cbs", "gnn_cbs"]  # default: double train
-    assert split_id("gnn_cbs") == ("gnn", "cbs") and split_id("edge") == ("edge", "pp")
+    assert model_ids({"planner": "cbs"}) == ["edge_cbs"]
+    assert model_ids({"planner": "both"}) == ["edge", "edge_cbs"]
+    assert model_ids({}) == ["edge", "edge_cbs"]  # default: double train
+    assert model_id("pp") == "edge" and model_id("cbs") == "edge_cbs"
+    assert planner_of("edge_cbs") == "cbs" and planner_of("edge") == "pp"

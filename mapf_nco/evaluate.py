@@ -13,8 +13,7 @@ Every test empties and rewrites ``outputs/<map>/n<N>/test/``:
     summary.md / summary.csv      Table-1 style: mean delay, gap vs EECBS, time, failures
     per_instance.csv              delay of every method on every instance
     summary.png                   bar chart of delays per instance (+ mean)
-    instance_000/comparison.png   top: PP (orig) | PP (Edge) | PP (GNN) | [CBS (Edge) |
-                                  CBS (GNN)] | EECBS | CBS
+    instance_000/comparison.png   top: PP (orig) | PP (Edge) | [CBS (Edge)] | EECBS | CBS
                                   bottom: the edge costs each model assigns (gradient)
                                   header: the training hyperparameters
     instance_000/*.png            each method on its own (and animation.gif if asked)
@@ -42,7 +41,7 @@ from mapf_nco.solver_cbs import WeightedCBS
 from mapf_nco.solver_pp import PrioritizedPlanner
 
 KEY = {REF: "orig", "CBS": "cbs", **{v: k for k, v in LABELS.items()}}
-COLS = ("orig", "edge", "gnn", "edge_cbs", "gnn_cbs")  # table columns besides expert / CBS
+COLS = ("orig",) + MODEL_IDS  # table columns besides expert / CBS
 NAMES = {"orig": "PP (orig)", **LABELS}
 
 
@@ -79,8 +78,7 @@ def test_random(cfg, trained_n, num_agents, count, seed=12345, kinds=MODEL_IDS,
 def run_test(cfg, grid, trained_n, scenarios, ename, label, kinds=MODEL_IDS,
              plots=True, animate=False, log=print, out_name="test"):
     from mapf_nco.tb import TB
-    from mapf_nco.viz import (animate_comparison, animate_cost_evolution, plot_comparison,
-                              plot_cost_evolution, plot_paths, plot_test_summary)
+    from mapf_nco.viz import animate_comparison, plot_comparison, plot_paths, plot_test_summary
 
     planner = PrioritizedPlanner(grid, w_min=cfg["w_min"])
     cbs = WeightedCBS(grid, w_min=cfg["w_min"], time_limit=float(cfg.get("cbs_time_limit", 60)))
@@ -90,7 +88,9 @@ def run_test(cfg, grid, trained_n, scenarios, ename, label, kinds=MODEL_IDS,
     tb = TB(tensorboard_dir(cfg, grid.name, trained_n, out_name), log) if plots else None
     has_cbs = any(s.cbs_paths for s in scenarios) or any(k.endswith("_cbs") for k in models)
     methods = [REF] + [LABELS[m] for m in models] + ["Expert"] + (["CBS"] if has_cbs else [])
-    names = {m: (ename if m == "Expert" else m) for m in methods}
+    # display names: the expert, and "CBS (optimal)" so it never reads like a CBS expert
+    names = {m: (ename if m == "Expert" else "CBS (optimal)" if m == "CBS" else m)
+             for m in methods}
     log(f"[test] {label}; methods: " + ", ".join(names.values()))
     log(f"       {header}")
 
@@ -98,7 +98,7 @@ def run_test(cfg, grid, trained_n, scenarios, ename, label, kinds=MODEL_IDS,
     fails = {m: 0 for m in methods}
     say = tqdm.write if log is print else log  # print without breaking the progress bar
     for i, sc in enumerate(tqdm(scenarios, desc="test", unit="inst")):
-        plans, t, weights, seq_weights = plan_all_timed(planner, sc, models, cbs)
+        plans, t, weights = plan_all_timed(planner, sc, models, cbs)
         if t.get(CBS_TIMEOUT) and "CBS" in fails:
             fails["CBS"] += 1
         lb = sc.lower_bound(grid)
@@ -128,20 +128,10 @@ def run_test(cfg, grid, trained_n, scenarios, ename, label, kinds=MODEL_IDS,
             titles = {m: f"{names.get(m, m)}: $\\sum_e y_e$ = {sum_of_costs(p)},  "
                          f"delay {sum_of_costs(p) - lb},  makespan {max(len(q) - 1 for q in p)}"
                       for m, p in ok.items()}
-            wt = {k: v + (" (mean over agents)" if k in seq_weights else "")
-                  for k, v in WEIGHT_LABELS.items()}
             comp = plot_comparison(
                 grid, sc, ok, titles, os.path.join(idir, "comparison.png"), REF,
-                weights=weights, weight_titles=wt,
+                weights=weights, weight_titles=WEIGHT_LABELS,
                 header=f"{label}, instance {i}  ||  {header}")
-            for kind, W in seq_weights.items():
-                plot_cost_evolution(grid, sc, W, plans[LABELS[kind]],
-                                    os.path.join(idir, f"cost_evolution_{kind}.png"),
-                                    f"{LABELS[kind]}: costs recomputed before each agent  ||  "
-                                    f"{label}, instance {i}")
-                if animate:
-                    animate_cost_evolution(grid, sc, W, plans[LABELS[kind]],
-                                           os.path.join(idir, f"cost_evolution_{kind}.gif"))
             for m, p in ok.items():
                 fname = (ename.lower() if m == "Expert" else KEY[m]) + ".png"
                 plot_paths(grid, p, sc.starts, sc.goals, titles[m], os.path.join(idir, fname))
@@ -226,7 +216,7 @@ def format_table(rows):
                  f"{', '.join(str(r['num_test']) for r in rows)} instance(s). Lower is better. "
                  "CBS is averaged over the instances it solved within its time limit.")
     if any(c.endswith("_cbs") for c in cols):
-        lines.append("CBS (Edge) / CBS (GNN) = CBS with the learned costs; a run that hits the "
+        lines.append("CBS (...) = CBS with the learned costs; a run that hits the "
                      "time limit falls back to the original CBS plan and counts as a failure.")
     lines += ["", "| Agents | " + " | ".join(head) + " | lower bound |",
               "|---:|" + "---:|" * (len(head) + 1)]

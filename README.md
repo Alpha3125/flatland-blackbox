@@ -106,11 +106,12 @@ python main.py          # settings from configs/paper.json
 
 ```
   1) Generate scenarios + EECBS, CBS and PP plans
-  2) Experiment: train a model (Edge / Potential / Potential+Edge; choose hyperparameters)
+  2) Experiment: train a model (Edge / Potential / Potential+Edge / Collision; choose settings)
   3) Test: saved test scenarios, or new random scenarios (comparison plots)
   4) Change number of agents
   5) Sweep: generate + queue of experiments + tests
   6) Clear outputs (models, plots, results; generated data is kept)
+  7) Potentials for CBS: learn on PP delay, test CBS with them as tie-breaker
   0) Quit
 ```
 
@@ -131,7 +132,7 @@ python main.py          # settings from configs/paper.json
      (the default), a separate model for each. See [CBS as the downstream planner](#cbs-as-the-downstream-planner).
 3. **Test** asks whether to use the saved test scenarios or new random ones. For new ones it also asks the number
    of agents, which can differ from the training count, then solves them with EECBS and CBS on the spot. Every
-   test replaces `test/`. Each `comparison.png` has three parts:
+   test replaces `test/`. Each `test_instance_XXX_comparison.png` has three parts:
    - **Header:** the training hyperparameters and the best epoch.
    - **Top row:** the plans of PP (orig), each trained model, EECBS and CBS. Every plan is collision-free, so
      the coloured markers show where collisions were *avoided* (`mapf_nco/hotspots.py`; bigger = more often):
@@ -147,16 +148,20 @@ python main.py          # settings from configs/paper.json
 6. **Clear outputs** deletes results, after a y/N confirmation (default no):
    - `1` the models, plots and tests for the current agent count (`outputs/<map>/n<N>/`);
    - `2` all sweeps (`outputs/sweeps/`);
-   - `3` everything in `outputs/`.
+   - `3` all pipeline runs (`outputs/pipeline/`);
+   - `4` everything in `outputs/`.
 
    The generated scenarios in `data/` are never deleted, so you don't have to regenerate.
+7. **Potentials for CBS** learns the potential and/or collision strengths directly on PP's delay, then tests
+   PP and several versions of CBS on new scenarios. It needs no generated data and no expert. See
+   [Potentials for CBS](#potentials-for-cbs).
 
 ### Option 5: Sweep (everything in one go)
 
 A sweep generates the data if needed, then runs a queue of experiments. For each hyperparameter you can give
 several values separated by commas, e.g. planner `pp, cbs` and learning rate `1e-4, 5e-4`, and it runs every
 combination (4 experiments here). Every experiment uses the agent count you selected. Each experiment:
-- trains the Edge model from scratch, for each planner it uses;
+- trains the chosen model(s) from scratch, for each planner it uses;
 - tests them on the same saved test scenarios (you choose how many);
 - optionally (answer **y**; the default is no) also tests them on a second set of new random scenarios with a
   different agent count. That set is generated once and shared, so experiments are compared fairly.
@@ -169,6 +174,19 @@ deleting `exp_2` the next sweep is `exp_2` again. The agent count and settings a
 - **`exp_01_planner-pp_lr-0.0001/`, `exp_02_…/`, …:** one folder per experiment, named after the settings
   that vary in the sweep. Each holds that experiment's models, loss graphs, TensorBoard logs and comparison plots
   (`test/` and `test_n<M>/`).
+
+When the sweep finishes, the last line it prints is an `scp` command that copies the whole sweep folder to your PC,
+for example:
+
+```
+scp -r girija@10.10.0.176:/home/girija/flatland-blackbox/outputs/sweeps/exp_1 C:\Users\Alpha\Downloads\
+```
+
+Paste it into a terminal on the PC and enter your password. The user name and the server address are detected:
+the address is the one your SSH session came in on, or else the server's main network address. To set them
+yourself, use `scp_user` and `scp_host` in `configs/paper.json`. The destination is `scp_dest` (default
+`C:\Users\Alpha\Downloads\`). Set it to `null` to turn the command off. No command is printed when the sweep runs
+on Windows itself.
 
 The same from the command line:
 
@@ -190,7 +208,9 @@ python main.py sweep      --agents 50 --grid model=edge,potential,collision --nu
 python main.py test       --agents 50 --num 10            # saved test scenarios
 python main.py test       --agents 50 --random 5 --test_agents 75   # 50-agent models, new 75-agent scenarios
 python main.py evaluate   --agents 50 75 100              # paper's Table 1, no plots
-python main.py clean      --agents 50 --what agents       # or --what sweeps / all; add --yes to skip the prompt
+python main.py pipeline   --agents 25                     # potentials for CBS (both models)
+python main.py pipeline   --agents 30 --model collision --cbs_test 30 --time_limit 30
+python main.py clean      --agents 50 --what agents       # or sweeps / pipeline / all; --yes skips the prompt
 ```
 
 `--set key=value` overrides any entry of `configs/paper.json`.
@@ -201,24 +221,26 @@ python main.py clean      --agents 50 --what agents       # or --what sweeps / a
 data/scenarios/random-32-32-20/n50/
     train.json.gz, test.json.gz     generated INPUT data: scenarios, PP priority orders,
                                     and the EECBS, PP and CBS plans
-outputs/random-32-32-20/n50/
-    checkpoints/<model>.pt          trained PP models: edge.pt, potential.pt, potential_edge.pt (the
+outputs/random-32-32-20/n50/          every file starts with the name of its folder
+    models/model_<model>.pt         trained PP models: model_edge.pt, model_potential.pt, ... (the
                                     epoch with the best validation delay, or makespan for a makespan
                                     objective)
-    checkpoints/<model>_cbs.pt      the same for CBS (planner cbs or both)
-    training/curves.png             all models together: loss (formula in the title) and
+    models/model_<model>_cbs.pt     the same for CBS (planner cbs or both)
+    training/training_curves.png    all models together: loss (formula in the title) and
                                     validation metric, with the selected epochs starred
-    training/history.csv            the numbers behind the graph, one row per model and epoch
-    tensorboard/<model>/            TensorBoard logs of training
-    tensorboard/test/               comparison maps and summary of the last test
-    test/                           emptied and rewritten on every test:
-        summary.png                 bar chart: delay of every method on every instance + mean
-        summary.md / summary.csv    Table-1 style numbers (delay, gap vs EECBS, makespan, time,
+    training/training_history.csv   the numbers behind the graph, one row per model and epoch
+    tensorboard/tensorboard_<model>/  TensorBoard logs of training (TensorBoard names the
+                                    event files inside itself)
+    tensorboard/tensorboard_test/   comparison maps and summary of the last test
+    test/                           emptied and rewritten on every test, no subfolders:
+        test_summary.png            bar chart: delay of every method on every instance + mean
+        test_summary.md / .csv      Table-1 style numbers (delay, gap vs EECBS, makespan, time,
                                     PP failures)
-        per_instance.csv            delay and makespan per instance and method
-        instance_000/comparison.png header: hyperparameters; top: PP (orig) | PP (Edge) |
+        test_per_instance.csv       delay and makespan per instance and method
+        test_instance_000_comparison.png  header: hyperparameters; top: PP (orig) | PP (Edge) |
                                     [CBS (Edge)] | EECBS | CBS; bottom: learned edge costs
-        instance_000/*.png          each method on its own (+ animation.gif with --animate)
+        test_instance_000_animation.gif   with --animate
+    test_n<M>/                      a sweep's second test set (same file names)
 outputs/sweeps/exp_<k>/            option 5 (sweep): sweep_summary.*, exp_01_<settings>/ ...
 outputs/results/table1.md           from `main.py evaluate`
 ```
@@ -227,9 +249,11 @@ The datasets are `.json.gz`, i.e. gzip-compressed JSON. 500 scenarios × 100 age
 of MB uncompressed. They are inputs, not results, which is why they sit in `data/` rather than `outputs/`.
 Python reads them with `gzip.open`, and 7-Zip can unpack them if you want to look inside.
 
-Training a model again replaces that model's checkpoint, its curves and rows in `training/`, and
-`tensorboard/<model>/`. Testing
-again replaces `test/` and `tensorboard/test/`.
+Training a model again replaces that model's saved model, its curves and rows in `training/`, and
+`tensorboard/tensorboard_<model>/`. Testing again replaces `test/` and `tensorboard/tensorboard_test/`.
+Models saved before this layout (`checkpoints/<model>.pt`) are still found and tested. The next training in that
+folder moves the old `training/` files to the `training_*` names and replaces the old TensorBoard folder of the
+model it trains.
 
 ### TensorBoard
 
@@ -377,7 +401,7 @@ optimal in about half the scenarios, so gains are small by nature. In a quick ch
 ## CBS as the downstream planner
 
 The paper only uses the learned costs inside PP. With `planner` set to `cbs` (or `both`, the default), the Edge
-model is also trained for **CBS**, as a separate model (`edge_cbs.pt`).
+model is also trained for **CBS**, as a separate model (`model_edge_cbs.pt`).
 
 - **How CBS uses the costs:** the low-level search adds up the learned cost of every move and wait, and the
   high-level search expands the node with the smallest total learned cost. So CBS returns the plan that
@@ -402,6 +426,98 @@ model is also trained for **CBS**, as a separate model (`edge_cbs.pt`).
   sum of costs, not the makespan.
 - **Testing:** when CBS models are loaded, the original CBS is also run live with the same time limit, so the
   times in the table compare fairly. The table gets a CBS (Edge) column.
+
+## Potentials for CBS
+
+The idea: learn edge costs that keep agents out of each other's way, cheaply with PP, and give them to CBS to
+break ties. CBS stays optimal, and fewer conflicts should mean a smaller search. Menu option 7, or
+`python main.py pipeline --agents 25`.
+
+**Steps** (`mapf_nco/pipeline.py`):
+
+1. **Scenarios:** new random starts and goals with a fixed PP priority order: training, validation and test.
+   No expert is needed.
+2. **Learn** (`mapf_nco/delay_search.py`): the four strengths of the potential model (map features; the one-way
+   lanes stay off) and/or of the collision model (per-scenario collision features). They give the costs
+   w = 1 + F·θ. The function minimised is PP's average delay on the training scenarios:
+
+   J(θ) = mean over scenarios of [ sum of costs of PP's plan with costs w(θ) − sum of the agents' own
+   shortest-path lengths ]
+
+   J is piecewise constant (PP's plan only changes at discrete points), and the black-box gradient of the delay
+   only pulls the costs back towards uniform, so the strengths are found by direct search instead: plain PP,
+   the starting strengths and random settings, then a pattern search (±step per strength, halving the step),
+   restarted from new random settings while the budget (`pipeline_evals`, default 150) lasts. PP takes
+   milliseconds per scenario, so this is quick. The final strengths are the best on the **validation**
+   scenarios among the 5 best on training, plain PP and the starting strengths, so they are never worse than
+   plain PP there. If PP fails with some costs, that scenario counts with plain PP's delay.
+3. **Test PP** on the test scenarios: plain PP vs PP with the learned costs (delay).
+4. **Test CBS** on the first `pipeline_cbs_test` test scenarios (`mapf_nco/solver_cbs.py`, `TieBreakCBS`):
+
+   | Version | What the low-level search does among equally short paths |
+   |---|---|
+   | CBS | takes the first one it finds (as `solve_cbs`) |
+   | CBS + CAT | fewest conflicts with the other agents' current paths (conflict-avoidance table, the standard trick) |
+   | CBS + \<model\> tie-break | lowest total learned cost |
+   | CBS + CAT + \<model\> tie-break | fewest conflicts first, then lowest learned cost |
+   | CBS on \<model\> costs | (not a tie-break) minimises the learned costs, like `WeightedCBS` |
+
+   All versions except the last minimise the real sum of costs, so their delay **must** equal plain CBS's;
+   the summary checks this on every scenario. What can differ is the search: scenarios solved within the time
+   limit (`pipeline_time_limit`, default 60 s), high-level nodes and time. The last version is the original
+   idea of planning on the learned costs; its delay can only be equal or higher.
+
+**Results** go to `outputs/pipeline/exp_<k>/` (the smallest free number), and the run ends with the `scp`
+command for that folder:
+
+```
+pipeline_summary.md / .png        the tables / plots: learned strengths, PP delays, CBS versions
+pipeline_config.json, pipeline_scenarios.json.gz
+<map>/n<N>/models/model_potential.pt, model_collision.pt   the learned strengths
+<map>/n<N>/training/training_search.png / .json / _<model>.csv   every setting tried
+<map>/n<N>/test/test_per_instance.csv                every method on every test scenario
+<map>/n<N>/test/test_instance_000_comparison.png     plain PP / learned PP / optimal CBS plans
+```
+
+The CBS table gives, per version: scenarios solved, mean time (a timeout counts as the time limit), mean and
+median nodes on the scenarios every version solved, how often it needed fewer / the same / more nodes than
+plain CBS, and scenarios only it or only plain CBS solved. The plot shows PP's delays, the number of scenarios
+solved within a given time, and each scenario's nodes against plain CBS's.
+
+**First results** (run in the cloud container, 2 cores; 300 training / 100 validation / 100 test scenarios,
+CBS on the first 40 (20 agents) or 30 (25 agents) test scenarios, 30 s limit; "×" = typical ratio of CBS
+nodes, the geometric mean over the scenarios both versions solved):
+
+| | 20 agents | 25 agents |
+|---|---|---|
+| Learned strengths (chosen on validation) | potential: toward 0.2, corridor 0.2; collision: naive 0.09, rest ≈ 0 | potential: toward 0.2, corridor 0.2; collision: naive 0.03, gave_way 0.05, close_call 0.05 |
+| PP delay, learned collision costs vs plain PP | −16.7% (47 better / 12 worse) | −9.4% (48 / 24) |
+| PP delay, learned potential costs vs plain PP | −3.8% (30 / 20) | 0.0% (34 / 33) |
+| CBS solved: plain / CAT / CAT + potential / CAT + collision | 33 / 38 / 39 / 38 of 40 | 21 / 26 / 25 / 25 of 30 |
+| Nodes vs plain CBS: collision tie-break alone / CAT alone | ×0.59 / ×0.15 | ×0.35 / ×0.04 |
+| Nodes vs CBS + CAT: CAT + collision tie-break | ×0.62, fewer on 29 of 38 | ×0.59, fewer on 20 of 25 |
+| Nodes vs CBS + CAT: CAT + potential tie-break | ×0.88, fewer on 20 of 38 | ×0.76, fewer on 15 of 25 |
+| CBS on the learned costs (minimising them) | same delay as optimal, but more nodes | same, more nodes |
+
+What this says so far:
+- The learned collision costs help both planners. They cut PP's delay by 9–17%, and as a tie-breaker they cut
+  CBS's search on top of the standard conflict-avoidance table by about 40% in a typical scenario,
+  consistently (fewer nodes in 76–80% of the scenarios). The potential costs help less.
+- The conflict-avoidance table on its own does most of the work (7–25 times fewer nodes than plain CBS). The
+  learned costs alone help much less, and alone they solved slightly fewer scenarios than plain CBS.
+- Fewer nodes did not yet mean more scenarios solved within the time limit (±1 of 30–40), so the hardest
+  scenarios stay hard. Planning on the learned costs instead of breaking ties with them only made the search
+  bigger.
+- The collision costs come from a plain PP run and the agents' individual shortest paths (a few milliseconds,
+  not counted in the CBS time). These are small samples; run more scenarios on the server before relying on
+  the exact numbers.
+
+Settings (`configs/paper.json`, or the menu / command-line options): `pipeline_models`, `pipeline_train`
+(400), `pipeline_val` (100), `pipeline_test` (100), `pipeline_cbs_test` (50), `pipeline_time_limit` (60),
+`pipeline_evals` (150), `pipeline_box` (search range per model), `pipeline_plots` (3), `pipeline_variants`
+(plain, cat, learned, learned+cat, weighted). The starting strengths are `potential_init` / `collision_init`.
+Python CBS is slow beyond about 25 agents; there, the CBS part mostly compares how many scenarios each
+version solves.
 
 ## Choices where the paper leaves details open
 
@@ -431,14 +547,18 @@ the paper's.
 ## Repository layout
 
 ```
-main.py                 interactive menu, or commands: generate | experiment | test | sweep | evaluate
+main.py                 interactive menu, or commands: generate | experiment | test | sweep | pipeline |
+                        evaluate | clean
 configs/paper.json      all settings (paper defaults)
 mapf_nco/
   grid.py               MovingAI map -> grid graph with directed edges and self-loops
   scenarios.py          scenario sampling, priority orders, dataset and .scen I/O
   solver_pp.py          Prioritized Planning with learned edge costs
   solver_eecbs.py       wrapper around the EECBS binary
-  solver_cbs.py         Python CBS: fallback expert, and CBS with learned costs (planner cbs)
+  solver_cbs.py         Python CBS: fallback expert, CBS with learned costs (planner cbs), and
+                        tie-breaking CBS (plain / conflict-avoidance table / learned costs)
+  delay_search.py       potential / collision strengths found by direct search on PP's delay
+  pipeline.py           option 7: potentials for CBS (search, PP and CBS tests, summary)
   planners.py           model (edge / potential / potential_edge) and planner (pp / cbs / both) settings, model ids
   potential.py          map features of the potential model (obstructions, single-lane passages, lanes)
   hotspots.py           where collisions were avoided: waits, close calls, naive collisions
@@ -455,8 +575,9 @@ tests/                  pytest suite (test_correctness.py: checks against refere
 
 ## Correctness checks
 
-`python -m pytest` runs the whole suite. `tests/test_correctness.py` checks each algorithm against a separately written,
-deliberately simple reference:
+`python -m pytest` runs the whole suite. `tests/test_correctness.py` (and `tests/test_pipeline.py` for the
+tie-breaking CBS and the delay search) checks each algorithm against a separately written, deliberately simple
+reference:
 
 | Check | Reference |
 |---|---|
@@ -467,6 +588,9 @@ deliberately simple reference:
 | CBS returns the optimal sum-of-costs | brute-force joint-state search over all agents |
 | Σ y_e = SOC and delay ≥ 0 | definition |
 | Black-box gradient | Eqs. 4–6 recomputed by hand |
+| Tie-breaking CBS (every mode) returns the optimal sum-of-costs | brute-force joint-state search |
+| Learned tie-break: still a shortest path and, among those, the cheapest under the learned costs (also with waits and detours forced by constraints) | brute force over every space-time path |
+| Delay search: delays as computed by direct PP calls; never worse than plain PP on validation | direct PP / definition |
 
 Each check was also confirmed to catch deliberately introduced bugs: PP ignoring swap conflicts, PP parking on a
 goal that a higher-priority agent visits later, waits not using the learned self-loop cost, CBS ignoring swaps, a

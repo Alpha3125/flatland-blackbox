@@ -104,7 +104,8 @@ def test_train_and_evaluate_smoke(grid, tmp_path, planner, kinds):
     cfg = _tiny_setup(grid, tmp_path)
     for kind in kinds:
         ckpt = train(cfg, 6, planner, workers=1, log=lambda *a: None, kind=kind)
-        assert os.path.exists(ckpt) and os.path.basename(ckpt) == f"{model_id(planner, kind)}.pt"
+        assert os.path.exists(ckpt)
+        assert os.path.basename(ckpt) == f"model_{model_id(planner, kind)}.pt"
     rows = evaluate(cfg, [6], log=lambda *a: None)
     for kind in kinds:
         assert f"{model_id(planner, kind)}_delay" in rows[0]
@@ -137,8 +138,10 @@ def test_cbs_models_skipped_when_cbs_times_out(grid, tmp_path, monkeypatch):
     assert os.path.exists(stale[:-3] + ".old.pt")  # renamed, so it isn't tested as this run's
     assert any("SKIPPED" in line and "2/2 validation" in line for line in log)
     import json
-    with open(os.path.join(training_dir(cfg, grid.name, 6), "history.json")) as f:
+    tdir = training_dir(cfg, grid.name, 6)
+    with open(os.path.join(tdir, "training_history.json")) as f:
         assert sorted(json.load(f)) == ["potential", "potential_edge"]
+    assert all(f.startswith("training_") for f in os.listdir(tdir))
     summary = test_saved(cfg, 6, 1, ["potential", "potential_edge"], plots=False,
                          log=lambda *a: None)
     assert "potential_delay" in summary and "potential_cbs_delay" not in summary
@@ -151,3 +154,31 @@ def test_cbs_trains_when_few_timeouts(grid, tmp_path):
     log = []
     assert run_training(cfg, 6, workers=1, log=log.append) == ["edge_cbs"]
     assert any("per call here" in line for line in log)  # the time estimate
+
+
+def test_models_of_the_old_layout_still_load(grid, tmp_path):
+    """Models saved as checkpoints/<id>.pt (before models/model_<id>.pt) are found and tested;
+    training again moves the old training files to the training_* names."""
+    import json
+    import shutil
+
+    from mapf_nco.compare import load_models
+    from mapf_nco.paths import checkpoint_path, legacy_checkpoint_path, training_dir
+    from mapf_nco.train import train
+
+    cfg = _tiny_setup(grid, tmp_path)
+    ckpt = train(cfg, 6, "pp", workers=1, log=lambda *a: None, kind="edge")
+    old = legacy_checkpoint_path(cfg, grid.name, 6, "edge")
+    os.makedirs(os.path.dirname(old))
+    shutil.move(ckpt, old)
+    tdir = training_dir(cfg, grid.name, 6)
+    for f in ("history.json", "history.csv", "curves.png"):
+        shutil.move(os.path.join(tdir, "training_" + f), os.path.join(tdir, f))
+    assert list(load_models(cfg, grid, 6, log=lambda *a: None)) == ["edge"]
+    train(cfg, 6, "pp", workers=1, log=lambda *a: None, kind="collision")
+    assert os.path.exists(checkpoint_path(cfg, grid.name, 6, "collision"))
+    assert sorted(os.listdir(tdir)) == ["training_curves.png", "training_history.csv",
+                                         "training_history.json"]
+    with open(os.path.join(tdir, "training_history.json")) as f:
+        assert sorted(json.load(f)) == ["collision", "edge"]  # the old run was carried over
+    assert sorted(load_models(cfg, grid, 6, log=lambda *a: None)) == ["collision", "edge"]

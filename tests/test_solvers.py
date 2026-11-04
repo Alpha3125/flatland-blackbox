@@ -106,11 +106,31 @@ def test_generate_and_both_test_modes(grid, tmp_path):
     out = tmp_path / "o" / grid.name / "n5" / "test"
     r = test_saved(cfg, 5, None, kinds=(), animate=True, log=quiet)
     assert r["num_test"] == 2 and r["cbs_solved"] == 2
-    assert (out / "instance_001" / "comparison.png").exists()
-    assert (out / "instance_000" / "animation.gif").exists()
+    assert (out / "test_instance_001_comparison.png").exists()
+    assert (out / "test_instance_000_animation.gif").exists()
+    files = sorted(p.name for p in out.iterdir())
+    assert all(f.startswith("test_") for f in files) and not any(p.is_dir() for p in out.iterdir())
+    assert {"test_summary.md", "test_summary.csv", "test_summary.png",
+            "test_per_instance.csv"} <= set(files)
     r = test_random(cfg, 5, 7, 2, seed=3, kinds=(), workers=1, log=quiet)
     assert r["agents"] == 7
-    assert not (out / "instance_000" / "animation.gif").exists()  # folder was replaced
+    assert not (out / "test_instance_000_animation.gif").exists()  # folder was replaced
+
+
+def test_scp_command(monkeypatch):
+    import mapf_nco.sweep as sw
+
+    monkeypatch.setattr(sw.os, "name", "posix")
+    monkeypatch.setattr(sw.os, "environ", {"SSH_CONNECTION": "10.10.0.5 51000 10.10.0.176 22",
+                                           "USER": "girija", "LOGNAME": "girija"})
+    cmd = sw.scp_command({}, "/home/girija/flatland-blackbox/outputs/sweeps/exp_1")
+    assert cmd == ("scp -r girija@10.10.0.176:/home/girija/flatland-blackbox/outputs/sweeps/exp_1 "
+                   r"C:\Users\Alpha\Downloads" "\\")
+    cfg = {"scp_user": "u", "scp_host": "server", "scp_dest": "D:\\x\\"}
+    assert sw.scp_command(cfg, "/a/b") == "scp -r u@server:/a/b D:\\x\\"
+    assert sw.scp_command({"scp_dest": None}, "/a/b") is None
+    monkeypatch.setattr(sw.os, "name", "nt")
+    assert sw.scp_command({}, "/a/b") is None  # on the PC itself
 
 
 def test_wsl_path_translation(monkeypatch):

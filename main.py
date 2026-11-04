@@ -8,6 +8,8 @@ Run without arguments for the interactive menu:
     1) Generate  scenarios with pre-computed EECBS (expert), CBS (optimal) and PP plans
     2) Experiment  train the Edge / Potential / Potential+Edge / Collision model for PP, CBS or both
     3) Test  on the saved test scenarios, or on new random ones with any number of agents
+    7) Potentials for CBS  learn the potential / collision strengths on PP's delay, then
+       compare CBS with and without them as tie-breaker
 
 Or use the commands directly:
 
@@ -20,6 +22,7 @@ Or use the commands directly:
     python main.py sweep      --agents 50 --grid lr=1e-4,5e-4 lam=0.5,1   4 experiments
     python main.py sweep      --agents 50 --grid model=edge,potential,potential_edge
     python main.py evaluate   --agents 50 75 100                          Table 1, no plots
+    python main.py pipeline   --agents 25                                 potentials for CBS
     python main.py clean      --agents 20      (or --what sweeps / --what all)
 
 ``--set key=value`` overrides any entry of the config file.
@@ -96,7 +99,7 @@ def open_file(path):
 
 def status(cfg, n):
     from mapf_nco.grid import Grid
-    from mapf_nco.paths import checkpoint_path, run_dir
+    from mapf_nco.paths import find_checkpoint, run_dir
     from mapf_nco.scenarios import dataset_path, load_dataset
 
     grid = Grid.from_file(cfg["map_path"])
@@ -120,11 +123,13 @@ def status(cfg, n):
             print(f"  {split:5s} data : not generated yet")
     from mapf_nco.planners import LABELS, MODEL_IDS
 
+    found = {mid: find_checkpoint(cfg, grid.name, n, mid) for mid in MODEL_IDS}
     for mid in MODEL_IDS:
-        info[mid] = os.path.exists(checkpoint_path(cfg, grid.name, n, mid))
+        info[mid] = found[mid] is not None
     trained = [LABELS[m] for m in MODEL_IDS if info[m]]
+    folders = sorted({os.path.dirname(p) for p in found.values() if p})
     print(f"  models     : {', '.join(trained) if trained else 'none trained yet'}"
-          + (f"  ({os.path.dirname(checkpoint_path(cfg, grid.name, n, 'edge'))})" if trained else ""))
+          + (f"  ({', '.join(folders)})" if trained else ""))
     info["any_model"] = bool(trained)
     print(f"  outputs    : {run_dir(cfg, grid.name, n)}")
     return info
@@ -232,7 +237,7 @@ def ask_hyperparameters(cfg):
 
 
 def menu_experiment(cfg, n, info):
-    from mapf_nco.paths import training_dir
+    from mapf_nco.paths import training_file
     from mapf_nco.train import run_training
 
     if not info["train"]:
@@ -244,7 +249,7 @@ def menu_experiment(cfg, n, info):
     if not trained:
         print("\nNo model was trained (see above).")
         return
-    curves = os.path.join(training_dir(cfg, info["grid"].name, n), "curves.png")
+    curves = training_file(cfg, info["grid"].name, n, "curves.png")
     print(f"\nExperiment finished. Loss graph (all models): {curves}")
     open_file(curves)
     print("Use option 3 to test the models.")
@@ -264,7 +269,7 @@ def warn_cbs(planners, n):
 
 def menu_test(cfg, n, info):
     from mapf_nco.evaluate import test_random, test_saved
-    from mapf_nco.paths import test_dir
+    from mapf_nco.paths import test_dir, test_file
 
     if not info["any_model"]:
         print("  (no trained models yet: the test compares original PP with EECBS/CBS only)")
@@ -290,7 +295,7 @@ def menu_test(cfg, n, info):
             return
         test_random(cfg, n, agents, count, seed, plots=True, animate=animate,
                     workers=default_workers())
-    open_file(os.path.join(test_dir(cfg, info["grid"].name, n), "summary.png"))
+    open_file(test_file(test_dir(cfg, info["grid"].name, n), "summary.png"))
 
 
 def _ask_values(prompt, default, cast):
@@ -382,7 +387,8 @@ def menu_sweep(cfg, n, info):
 
 
 def clear_outputs(cfg, what, map_name=None, n=None):
-    """Delete outputs. what: 'agents' (one agent count), 'sweeps' or 'all'. Never touches data/."""
+    """Delete outputs. what: 'agents' (one agent count), 'sweeps', 'pipeline' or 'all'.
+    Never touches data/."""
     import shutil
 
     from mapf_nco.paths import run_dir
@@ -390,6 +396,7 @@ def clear_outputs(cfg, what, map_name=None, n=None):
     out = os.path.abspath(cfg["output_dir"])
     target = {"agents": run_dir(cfg, map_name, n) if n is not None else None,
               "sweeps": os.path.join(cfg["output_dir"], "sweeps"),
+              "pipeline": os.path.join(cfg["output_dir"], "pipeline"),
               "all": cfg["output_dir"]}[what]
     target = os.path.abspath(target)
     if not (target == out or target.startswith(out + os.sep)):
@@ -413,14 +420,48 @@ def menu_clear(cfg, n, info):
 
     print(f"  1) results for {n} agents   ({run_dir(cfg, info['grid'].name, n)})")
     print(f"  2) all sweeps               ({os.path.join(cfg['output_dir'], 'sweeps')})")
-    print(f"  3) everything in outputs    ({cfg['output_dir']})")
+    print(f"  3) all pipeline runs        ({os.path.join(cfg['output_dir'], 'pipeline')})")
+    print(f"  4) everything in outputs    ({cfg['output_dir']})")
     print("     (the generated scenarios in data/ are never deleted)")
-    c = ask("  Clear", 0, int, [0, 1, 2, 3])
+    c = ask("  Clear", 0, int, [0, 1, 2, 3, 4])
     if c == 0:
         return
-    what = {1: "agents", 2: "sweeps", 3: "all"}[c]
+    what = {1: "agents", 2: "sweeps", 3: "pipeline", 4: "all"}[c]
     if ask_yes("  This deletes trained models and results permanently. Sure?", False):
         clear_outputs(cfg, what, info["grid"].name, n)
+
+
+def menu_pipeline(cfg, n, info):
+    from mapf_nco.pipeline import DEFAULTS, run_pipeline
+
+    print("  Potentials for CBS:")
+    print("    1. new random scenarios (no expert needed)")
+    print("    2. learn the potential / collision strengths by searching on PP's delay")
+    print("    3. test PP: plain vs learned costs (delay)")
+    print("    4. test CBS: plain, + conflict-avoidance table, + learned costs as tie-breaker,")
+    print("       and planning on the learned costs (solved, search nodes, time)")
+    cfg = dict(cfg)
+    d = lambda k: cfg.get(k, DEFAULTS[k])  # noqa: E731
+    m = ask("  Models: potential, collision or both", "both", str,
+            ["potential", "collision", "both"])
+    kinds = ["potential", "collision"] if m == "both" else [m]
+    cfg["pipeline_train"] = ask("  Training scenarios", d("pipeline_train"), int)
+    cfg["pipeline_val"] = ask("  Validation scenarios", d("pipeline_val"), int)
+    cfg["pipeline_test"] = ask("  Test scenarios (PP)", d("pipeline_test"), int)
+    cfg["pipeline_cbs_test"] = ask("  Of those, solved with CBS (slow)", d("pipeline_cbs_test"),
+                                   int)
+    cfg["pipeline_time_limit"] = ask("  CBS time limit per scenario, seconds",
+                                     d("pipeline_time_limit"), float)
+    cfg["pipeline_evals"] = ask("  Strength settings tried per model", d("pipeline_evals"), int)
+    cfg["seed"] = ask("  Random seed", cfg["seed"], int)
+    workers = ask("  Parallel workers", default_workers(), int)
+    if n > 40:
+        print(f"  Note: with {n} agents plain CBS times out on most scenarios; the CBS part "
+              "then mostly compares how many each version solves.")
+    if not ask_yes("  Start?", True):
+        return
+    root, _ = run_pipeline(cfg, n, kinds, workers=workers)
+    open_file(os.path.join(root, "pipeline_summary.png"))
 
 
 def interactive(config_path):
@@ -439,8 +480,9 @@ def interactive(config_path):
   4) Change number of agents
   5) Sweep: generate + queue of experiments + tests
   6) Clear outputs (models, plots, results; generated data is kept)
+  7) Potentials for CBS: learn on PP delay, test CBS with them as tie-breaker
   0) Quit""")
-        c = ask("Choose", None, int, [0, 1, 2, 3, 4, 5, 6])
+        c = ask("Choose", None, int, [0, 1, 2, 3, 4, 5, 6, 7])
         try:
             if c == 0:
                 return
@@ -456,6 +498,8 @@ def interactive(config_path):
                 menu_sweep(cfg, n, info)
             elif c == 6:
                 menu_clear(cfg, n, info)
+            elif c == 7:
+                menu_pipeline(cfg, n, info)
         except KeyboardInterrupt:
             print("\n  (interrupted, back to menu)")
         except Exception as e:  # keep the menu alive, show what went wrong
@@ -468,7 +512,10 @@ def interactive(config_path):
 # --------------------------------------------------------------- commands
 HPARAMS = ("epochs", "batch_size", "lr", "lam", "loss_reduction", "w_min", "val_fraction",
            "seed", "device", "expert", "eecbs_bin", "cbs_time_limit", "objective",
-           "makespan_tau", "makespan_weight", "planner", "model")
+           "makespan_tau", "makespan_weight", "planner", "model",
+           "pipeline_models", "pipeline_train", "pipeline_val", "pipeline_test",
+           "pipeline_cbs_test", "pipeline_evals", "pipeline_plots", "pipeline_time_limit",
+           "pipeline_variants")
 
 
 def parse_args(argv=None):
@@ -542,9 +589,27 @@ def parse_args(argv=None):
 
     c = sub.add_parser("clean", help="delete outputs (models, plots, results); data/ is kept")
     common(c)
-    c.add_argument("--what", choices=["agents", "sweeps", "all"], default="agents",
-                   help="agents = outputs of --agents (default); sweeps; all = all of outputs/")
+    c.add_argument("--what", choices=["agents", "sweeps", "pipeline", "all"], default="agents",
+                   help="agents = outputs of --agents (default); sweeps; pipeline; "
+                        "all = all of outputs/")
     c.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+
+    q = sub.add_parser("pipeline", help="potentials for CBS: learn the strengths on PP's "
+                                        "delay, test CBS with them as tie-breaker "
+                                        "(default --agents 25)")
+    common(q)
+    q.add_argument("--model", dest="pipeline_models", nargs="+",
+                   choices=["potential", "collision"], help="default: both")
+    for flag, key in (("train", "pipeline_train"), ("val", "pipeline_val"),
+                      ("test", "pipeline_test"), ("cbs_test", "pipeline_cbs_test"),
+                      ("evals", "pipeline_evals"), ("plots", "pipeline_plots")):
+        q.add_argument(f"--{flag}", dest=key, type=int)
+    q.add_argument("--time_limit", dest="pipeline_time_limit", type=float,
+                   help="CBS time limit per scenario, seconds (default 60)")
+    q.add_argument("--variants", dest="pipeline_variants", nargs="+",
+                   choices=["plain", "cat", "learned", "learned+cat", "weighted"],
+                   help="CBS versions (default: all)")
+    q.add_argument("--seed", type=int)
 
     e = sub.add_parser("evaluate", help="Table 1 over all saved test scenarios, no plots")
     common(e)
@@ -571,7 +636,8 @@ def main(argv=None):
     if getattr(args, "no_cbs", False):
         explicit["with_cbs"] = False
     cfg = load_config(args.config, args.set, **explicit)
-    agents = args.agents or cfg["agent_counts"]
+    agents = args.agents or (cfg.get("pipeline_agents", [25]) if args.command == "pipeline"
+                             else cfg["agent_counts"])
     from mapf_nco.planners import MODEL_IDS
 
     models = getattr(args, "models", None)
@@ -617,6 +683,12 @@ def main(argv=None):
             generate_datasets(dict(cfg, augment=True), [n], workers=workers)
             run_sweep(cfg, n, grid_values or {"lr": [cfg["lr"]]}, args.num, args.second_agents,
                       args.second_num, animate=args.animate, workers=workers)
+
+    if args.command == "pipeline":
+        from mapf_nco.pipeline import run_pipeline
+
+        for n in agents:
+            run_pipeline(cfg, n, workers=workers)
 
     if args.command == "clean":
         from mapf_nco.grid import Grid

@@ -8,17 +8,18 @@ Two ways to test the trained models:
   solved by EECBS (and CBS) on the spot. This checks that the models generalise
   to start/goal positions and agent counts they have never seen.
 
-Every test empties and rewrites ``outputs/<map>/n<N>/test/``:
+Every test empties and rewrites ``outputs/<map>/n<N>/test/`` (all files start with test_):
 
-    summary.md / summary.csv      Table-1 style: mean delay, gap vs EECBS, time, failures
-    per_instance.csv              delay of every method on every instance
-    summary.png                   bar chart of delays per instance (+ mean)
-    instance_000/comparison.png   top: PP (orig) | PP (Edge) | [CBS (Edge)] | EECBS | CBS
-                                  bottom: the edge costs each model assigns (gradient)
-                                  header: the training hyperparameters
-    instance_000/*.png            each method on its own (and animation.gif if asked)
+    test_summary.md / .csv              Table-1 style: mean delay, gap vs EECBS, time, failures
+    test_per_instance.csv               delay of every method on every instance
+    test_summary.png                    bar chart of delays per instance (+ mean)
+    test_instance_000_comparison.png    top: PP (orig) | PP (Edge) | [CBS (Edge)] | EECBS | CBS
+                                        bottom: the edge costs each model assigns (gradient)
+                                        header: the training hyperparameters
+    test_instance_000_animation.gif     if asked
 
-The comparison maps and the summary are also logged to TensorBoard (``tensorboard/test``).
+The comparison maps and the summary are also logged to TensorBoard
+(``tensorboard/tensorboard_test``).
 
     gap = (mean delay_method - mean delay_EECBS) / mean delay_EECBS * 100
 """
@@ -35,7 +36,7 @@ from mapf_nco.compare import CBS_TIMEOUT, LABELS, MODEL_IDS, REF, WEIGHT_LABELS,
     hparams_header, load_models, plan_all_timed
 from mapf_nco.grid import Grid
 from mapf_nco.metrics import optimality_gap, sum_of_costs
-from mapf_nco.paths import fresh_dir, tensorboard_dir, test_dir
+from mapf_nco.paths import fresh_dir, tensorboard_dir, test_dir, test_file
 from mapf_nco.scenarios import dataset_path, load_dataset
 from mapf_nco.solver_cbs import WeightedCBS
 from mapf_nco.solver_pp import PrioritizedPlanner
@@ -78,7 +79,7 @@ def test_random(cfg, trained_n, num_agents, count, seed=12345, kinds=MODEL_IDS,
 def run_test(cfg, grid, trained_n, scenarios, ename, label, kinds=MODEL_IDS,
              plots=True, animate=False, log=print, out_name="test"):
     from mapf_nco.tb import TB
-    from mapf_nco.viz import animate_comparison, plot_comparison, plot_paths, plot_test_summary
+    from mapf_nco.viz import animate_comparison, plot_comparison, plot_test_summary
 
     planner = PrioritizedPlanner(grid, w_min=cfg["w_min"])
     cbs = WeightedCBS(grid, w_min=cfg["w_min"], time_limit=float(cfg.get("cbs_time_limit", 60)))
@@ -123,31 +124,28 @@ def run_test(cfg, grid, trained_n, scenarios, ename, label, kinds=MODEL_IDS,
             f"{'-' if row[m + ' makespan'] is None else row[m + ' makespan']}" for m in methods))
 
         if plots:
-            idir = os.path.join(out, f"instance_{i:03d}")
+            stem = f"instance_{i:03d}"
             ok = {m: p for m, p in plans.items() if p is not None}
             titles = {m: f"{names.get(m, m)}: $\\sum_e y_e$ = {sum_of_costs(p)},  "
                          f"delay {sum_of_costs(p) - lb},  makespan {max(len(q) - 1 for q in p)}"
                       for m, p in ok.items()}
             comp = plot_comparison(
-                grid, sc, ok, titles, os.path.join(idir, "comparison.png"), REF,
+                grid, sc, ok, titles, test_file(out, f"{stem}_comparison.png"), REF,
                 weights=weights, weight_titles=WEIGHT_LABELS,
                 header=f"{label}, instance {i}  ||  {header}")
-            for m, p in ok.items():
-                fname = (ename.lower() if m == "Expert" else KEY[m]) + ".png"
-                plot_paths(grid, p, sc.starts, sc.goals, titles[m], os.path.join(idir, fname))
             if animate:
-                animate_comparison(grid, sc, ok, titles, os.path.join(idir, "animation.gif"))
-            tb.image_file(f"comparison/instance_{i:03d}", comp)
+                animate_comparison(grid, sc, ok, titles, test_file(out, f"{stem}_animation.gif"))
+            tb.image_file(f"comparison/{stem}", comp)
 
     summary = _aggregate(scenarios[0].num_agents, per_instance, methods, times, fails)
     summary["expert_name"] = ename
     table = format_table([summary])
-    with open(os.path.join(out, "summary.md"), "w", encoding="utf-8") as f:
+    with open(test_file(out, "summary.md"), "w", encoding="utf-8") as f:
         f.write(f"{label}\n\n{header}\n\n{table}\n\n"
                 + _per_instance_md(per_instance, methods, names) + "\n")
-    _write_csv(os.path.join(out, "summary.csv"), [summary])
-    _write_csv(os.path.join(out, "per_instance.csv"), per_instance)
-    chart = plot_test_summary(per_instance, methods, os.path.join(out, "summary.png"),
+    _write_csv(test_file(out, "summary.csv"), [summary])
+    _write_csv(test_file(out, "per_instance.csv"), per_instance)
+    chart = plot_test_summary(per_instance, methods, test_file(out, "summary.png"),
                               f"Delay: {label} (lower is better)\n{header}",
                               expert_name=ename)
     if tb is not None:
@@ -156,8 +154,8 @@ def run_test(cfg, grid, trained_n, scenarios, ename, label, kinds=MODEL_IDS,
         tb.close()
     log("\n" + table)
     log(f"\nResults (folder replaced on every test): {out}")
-    log("  summary.png, summary.md, per_instance.csv"
-        + (", instance_XXX/comparison.png" if plots else ""))
+    log("  test_summary.png, test_summary.md, test_per_instance.csv"
+        + (", test_instance_XXX_comparison.png" if plots else ""))
     return summary
 
 

@@ -3,7 +3,6 @@ scenario, and describe the training hyperparameters for plot headers."""
 
 from __future__ import annotations
 
-import os
 import time
 
 import numpy as np
@@ -21,12 +20,12 @@ def load_models(cfg, grid, n, kinds=MODEL_IDS, log=print):
 
     ``kinds``: model ids (e.g. edge, potential, potential_edge_cbs). Missing ones are skipped.
     """
-    from mapf_nco.paths import checkpoint_path
+    from mapf_nco.paths import find_checkpoint
 
     models, missing = {}, []
     for mid in (m for m in MODEL_IDS if m in kinds):
-        ckpt = checkpoint_path(cfg, grid.name, n, mid)
-        if os.path.exists(ckpt):
+        ckpt = find_checkpoint(cfg, grid.name, n, mid)
+        if ckpt is not None:
             from mapf_nco.train import load_model  # needs torch only when a model exists
 
             model, info = load_model(ckpt, grid)

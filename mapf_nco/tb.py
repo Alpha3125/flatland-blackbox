@@ -9,6 +9,9 @@ View the logs with:
 
 from __future__ import annotations
 
+import os
+import shutil
+
 from mapf_nco.paths import fresh_dir
 
 
@@ -23,6 +26,11 @@ class TB:
             log("  (TensorBoard logging off: run 'pip install tensorboard' to enable it)")
             return
         fresh_dir(log_dir)  # each run replaces the previous logs
+        parent, base = os.path.split(log_dir)
+        if base.startswith("tensorboard_"):  # ... also those of the old layout (tensorboard/<name>)
+            old = os.path.join(parent, base[len("tensorboard_"):])
+            if os.path.isdir(old):
+                shutil.rmtree(old, ignore_errors=True)
         self.writer = SummaryWriter(log_dir)
         self.log_dir = log_dir
 

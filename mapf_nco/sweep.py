@@ -22,8 +22,12 @@ exp_2 makes the next sweep exp_2 again), and each experiment to
                                      validation delay, test delays and gaps
     sweep_summary.png                test delay of every experiment (bar chart)
     second_test.json.gz              the shared second test set
-    exp_01/ ... exp_K/<map>/n<N>/    checkpoints, training curves, TensorBoard,
-                                     test/ and test_n<M>/ comparison plots
+    exp_01/ ... exp_K/<map>/n<N>/    models/, training/, tensorboard/,
+                                     test/ and test_n<M>/ (comparison plots)
+
+When it finishes, it prints an scp command that copies the sweep folder to your PC
+(``scp_dest`` in the config, default C:\\Users\\Alpha\\Downloads\\; the user and
+address are detected, or set ``scp_user`` / ``scp_host``; ``scp_dest`` null turns it off).
 """
 
 from __future__ import annotations
@@ -154,18 +158,57 @@ def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=
     log(f"\n[sweep] done. {os.path.join(root, 'sweep_summary.md')}")
     with open(os.path.join(root, "sweep_summary.md"), encoding="utf-8") as f:
         log(f.read())
+    cmd = scp_command(cfg, root)
+    if cmd:
+        log("[sweep] to copy the results to your PC, run this on the PC:\n\n" + cmd + "\n")
     return root, rows
+
+
+def _server_address():
+    """This machine's address as seen from the PC: the one the SSH session came in on
+    (SSH_CONNECTION), else the address of the default network interface."""
+    import socket
+
+    ssh = os.environ.get("SSH_CONNECTION", "").split()
+    if len(ssh) == 4:
+        return ssh[2]
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))  # no packet is sent; picks the outgoing interface
+            return s.getsockname()[0]
+    except OSError:
+        return socket.gethostname()
+
+
+def scp_command(cfg, path):
+    """``scp -r user@host:/abs/path <scp_dest>`` to copy ``path`` from this machine to the
+    PC, or None (on Windows, where the files are already local, or when scp_dest is off)."""
+    import getpass
+
+    dest = cfg.get("scp_dest", "C:\\Users\\Alpha\\Downloads\\")
+    if not dest or os.name == "nt":
+        return None
+    user = cfg.get("scp_user") or getpass.getuser()
+    host = cfg.get("scp_host") or _server_address()
+    if ":" in host:  # IPv6
+        host = f"[{host}]"
+    src = os.path.abspath(path).replace(os.sep, "/")
+    if " " in src:
+        src = f'"{src}"'
+    return f"scp -r {user}@{host}:{src} {dest}"
 
 
 def _best_epochs(cfg, grid, n, ids):
     import torch
 
-    from mapf_nco.paths import checkpoint_path
+    from mapf_nco.paths import find_checkpoint
 
     out = {}
     for kind in ids:
-        ck = torch.load(checkpoint_path(cfg, grid.name, n, kind), map_location="cpu",
-                        weights_only=False)
+        path = find_checkpoint(cfg, grid.name, n, kind)
+        if path is None:
+            continue
+        ck = torch.load(path, map_location="cpu", weights_only=False)
         out[f"{kind}_best_epoch"] = ck.get("epoch")
         out[f"{kind}_val_delay"] = round(float(ck.get("val_delay", float("nan"))), 2)
     return out

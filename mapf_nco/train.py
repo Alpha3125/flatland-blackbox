@@ -40,7 +40,8 @@ from mapf_nco.grid import Grid
 from mapf_nco.models import build_model, make_batch
 from mapf_nco.scenarios import dataset_path, load_dataset, train_val_split
 from mapf_nco.metrics import edge_usage
-from mapf_nco.paths import checkpoint_path, tensorboard_dir, training_dir
+from mapf_nco.paths import (checkpoint_path, find_checkpoint, tensorboard_dir, training_dir,
+                            training_file)
 from mapf_nco.planners import KIND_LABELS, LABELS, MODEL_IDS, model_id, training_runs
 from mapf_nco.potential import describe
 from mapf_nco.solver_cbs import WeightedCBS
@@ -182,10 +183,11 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
     CBS times out (``cbs_train_time_limit``) on more than ``cbs_max_timeout_fraction``
     (default 0.5) of the validation scenarios, CBS can't solve this agent count, the
     training would take hours and give almost no gradient, so the model is skipped
-    (an earlier checkpoint of it is renamed to <id>.old.pt so it isn't tested).
+    (an earlier saved model of it is renamed to model_<id>.old.pt so it isn't tested).
 
     Writes (replacing earlier runs of the same model):
-      checkpoints/<id>.pt, training/{curves.png,history.csv,history.json}, tensorboard/<id>/
+      models/model_<id>.pt, training/training_{curves.png,history.csv,history.json},
+      tensorboard/tensorboard_<id>/
     with <id> = <kind> (PP) or <kind>_cbs (CBS).
     """
     if planner not in ("pp", "cbs"):
@@ -217,10 +219,12 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
         model = build_model(kind, grid, **model_kwargs).to(device)
         log(f"  start: {_strengths(kind, grid, model)}")
     elif kind == "potential_edge":
-        pot_ckpt = checkpoint_path(cfg, grid.name, n, model_id(planner, "potential"))
-        if not os.path.exists(pot_ckpt):
-            raise FileNotFoundError(f"{pot_ckpt} not found: potential_edge starts from the trained "
-                                    "potential model, so train model 'potential' first")
+        pot_ckpt = find_checkpoint(cfg, grid.name, n, model_id(planner, "potential"))
+        if pot_ckpt is None:
+            raise FileNotFoundError(
+                f"{checkpoint_path(cfg, grid.name, n, model_id(planner, 'potential'))} not found: "
+                "potential_edge starts from the trained potential model, so train model "
+                "'potential' first")
         pot, _ = load_model(pot_ckpt, grid, device)
         with torch.no_grad():
             w0 = np.maximum(pot.costs().detach().cpu().double().numpy(), cfg["w_min"])
@@ -258,11 +262,7 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
                     "gradient (a timed-out call gives none). Use planner pp, fewer agents, or a "
                     "longer cbs_train_time_limit (skip threshold: cbs_max_timeout_fraction "
                     f"{max_frac:g}).")
-                if os.path.exists(ckpt):
-                    old = ckpt[:-3] + ".old.pt"
-                    os.replace(ckpt, old)
-                    log(f"  (an earlier {mid} model from another run was renamed to {old})")
-                _update_runs(tdir, mid, None)
+                _retire(cfg, grid.name, n, mid, log)
                 return None
             if base_to:
                 log(f"  original CBS timed out on {base_to}/{len(val_set)} validation scenarios; "
@@ -380,7 +380,8 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
     runs = _update_runs(tdir, mid, {"history": history, "batch_losses": batch_losses,
                                      "refs": refs, "best_epoch": best_epoch,
                                      "reduction": reduction})
-    curves = plot_training_curves(runs, n, os.path.join(tdir, "curves.png"), current=mid)
+    curves = plot_training_curves(runs, n, training_file(cfg, grid.name, n, "curves.png"),
+                                  current=mid)
     tb.image_file("curves", curves)
     tb.close()
 
@@ -414,6 +415,18 @@ def _strengths(kind, grid, model_or_theta):
     return describe(grid, theta)
 
 
+def _retire(cfg, map_name, n, mid, log):
+    """A skipped model: rename an earlier run's saved model (so it isn't tested as if it
+    were this run's) and drop its training curves."""
+    ckpt = find_checkpoint(cfg, map_name, n, mid)
+    if ckpt is not None:
+        old = checkpoint_path(cfg, map_name, n, mid)[:-3] + ".old.pt"
+        os.makedirs(os.path.dirname(old), exist_ok=True)
+        os.replace(ckpt, old)
+        log(f"  (an earlier {mid} model from another run was renamed to {old})")
+    _update_runs(training_dir(cfg, map_name, n), mid, None)
+
+
 def _duration(sec):
     if sec < 90:
         return f"{sec:.0f} s"
@@ -435,12 +448,7 @@ def run_training(cfg, n, workers=1, log=print):
         if kind == "potential_edge" and model_id(planner, "potential") not in done:
             log(f"[train] n={n} {LABELS[mid]}: skipped, it starts from the "
                 f"{LABELS[model_id(planner, 'potential')]} model, which was skipped")
-            ckpt = checkpoint_path(cfg, Grid.from_file(cfg["map_path"]).name, n, mid)
-            if os.path.exists(ckpt):  # an earlier run's: don't test it as if it were this one
-                os.replace(ckpt, ckpt[:-3] + ".old.pt")
-                log(f"  (an earlier {mid} model from another run was renamed to "
-                    f"{ckpt[:-3]}.old.pt)")
-            _update_runs(training_dir(cfg, Grid.from_file(cfg["map_path"]).name, n), mid, None)
+            _retire(cfg, Grid.from_file(cfg["map_path"]).name, n, mid, log)
             skipped.append(mid)
             continue
         if train(cfg, n, planner, workers=workers, log=log, kind=kind) is None:
@@ -485,15 +493,19 @@ def _log_epoch(tb, model, kind, h, refs):
 def _update_runs(out_dir, kind, run):
     """Store this model's run next to the other planner's; rewrite the shared files.
 
-    history.json holds every model's run (used to redraw the combined plot);
-    history.csv has one row per (model, epoch). Retraining a model replaces only
-    that model's entries; ``run=None`` removes them (a skipped model).
+    training_history.json holds every model's run (used to redraw the combined plot);
+    training_history.csv has one row per (model, epoch). Retraining a model replaces
+    only that model's entries; ``run=None`` removes them (a skipped model). Files of
+    the old layout (history.json, history.csv, curves.png) are read and replaced.
     """
-    path = os.path.join(out_dir, "history.json")
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, "training_history.json")
+    legacy = {f: os.path.join(out_dir, f) for f in ("history.json", "history.csv", "curves.png")}
+    src = path if os.path.exists(path) else legacy["history.json"]
     runs = {}
-    if os.path.exists(path):
+    if os.path.exists(src):
         try:
-            with open(path) as f:
+            with open(src) as f:
                 runs = json.load(f)
             if not isinstance(runs, dict) or any(not isinstance(v, dict) for v in runs.values()):
                 runs = {}  # old per-model format
@@ -510,11 +522,14 @@ def _update_runs(out_dir, kind, run):
         json.dump(runs, f, indent=1)
     keys = ["model", "epoch", "train_loss", "val_delay", "val_makespan", "val_failures",
             "train_pp_failures", "zero_grad_scenarios", "val_cbs_nodes", "seconds"]
-    with open(os.path.join(out_dir, "history.csv"), "w", newline="") as f:
+    with open(os.path.join(out_dir, "training_history.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore")
         w.writeheader()
         for k, r in runs.items():
             w.writerows({"model": k, **h} for h in r["history"])
+    for f in legacy.values():  # now in the training_* files
+        if os.path.exists(f):
+            os.remove(f)
     return runs
 
 

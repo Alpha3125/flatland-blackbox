@@ -30,6 +30,21 @@
   "makespan_weight": 0.001,
   "w_min": 0.001,
 
+  "pipeline_models": ["potential", "collision"],
+  "pipeline_train": 400,
+  "pipeline_val": 100,
+  "pipeline_test": 100,
+  "pipeline_cbs_test": 50,
+  "pipeline_time_limit": 60,
+  "pipeline_evals": 150,
+  "pipeline_box": {"potential": [-0.3, 0.6], "collision": [-0.2, 0.4]},
+  "pipeline_plots": 3,
+  "pipeline_variants": ["plain", "cat", "learned", "learned+cat", "weighted"],
+
   "seed": 0,
-  "device": "cpu"
+  "device": "cpu",
+
+  "scp_dest": "C:\\Users\\Alpha\\Downloads\\",
+  "scp_user": null,
+  "scp_host": null
 }

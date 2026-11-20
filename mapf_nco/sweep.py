@@ -43,13 +43,15 @@ from mapf_nco.planners import KIND_LABELS, MODEL_IDS, kind_of, model_ids, planne
 from mapf_nco.scenarios import load_dataset, save_dataset
 
 # Hyperparameters that can be swept.
-SWEEPABLE = ("model", "train_method", "seq_update", "planner", "objective", "makespan_tau", "makespan_weight", "epochs", "batch_size",
+SWEEPABLE = ("model", "train_method", "seq_update", "seq_mode", "block_factor", "block_cap",
+             "block_retries", "block_relax", "planner", "objective", "makespan_tau", "makespan_weight", "epochs", "batch_size",
              "lr", "lam", "loss_reduction", "w_min", "val_fraction", "seed")
 
 
 _SHORT = {"loss_reduction": "loss", "makespan_tau": "tau", "makespan_weight": "mw",
           "batch_size": "batch", "val_fraction": "val", "train_method": "method",
-          "seq_update": "upd"}
+          "seq_update": "upd", "seq_mode": "mode", "block_factor": "bf", "block_cap": "cap",
+          "block_retries": "retries", "block_relax": "relax"}
 
 
 def _short(key):

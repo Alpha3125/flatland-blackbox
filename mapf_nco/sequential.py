@@ -18,6 +18,10 @@ one timestep (state) at a time:
 So the costs are corrected exactly where PP goes wrong, and the states where PP
 already agrees with the expert give no update. Validation and testing are unchanged:
 plain PP plans the whole scenario once with the learned costs.
+
+``seq_mode: blockade`` (:class:`Blockade`) replaces the gradient step by an
+aggressive one: PP's deviating moves get much dearer (up to a near-blockade), the
+expert's cheaper, and PP replans from the same state until it follows the expert.
 """
 
 from __future__ import annotations
@@ -95,3 +99,83 @@ class SeqResult:
     @property
     def ok(self):
         return self.deviations > 0
+
+
+# ------------------------------------------------------------------- blockade mode
+SEQ_MODES = ("gradient", "blockade")
+BLOCKADE_KINDS = ("edge", "potential_edge", "cell")  # a cost per edge or per cell
+
+
+class Blockade:
+    """The aggressive sequential update (``seq_mode: blockade``).
+
+    At a state where PP's next moves deviate from the expert's, the moves PP makes
+    instead (for the cell model: the cells it enters instead) get ``factor`` times
+    dearer, up to ``cap`` (a near-blockade: still passable, so PP never gets stuck),
+    and the expert's moves get ``factor`` times cheaper, down to 1. PP replans from
+    the same state until it follows the expert or ``retries`` updates are used up.
+    After every epoch, ``relax`` pulls every cost back towards 1 (cost - 1 shrinks
+    by that factor), so only blockades that keep being needed survive.
+
+    The costs live in ``p``: per edge for the Edge model (cost = p), per cell for the
+    cell model (cost of an edge = 1 + p[destination cell]).
+    """
+
+    def __init__(self, grid, kind, factor=3.0, cap=20.0, retries=5):
+        if kind not in BLOCKADE_KINDS:
+            raise ValueError(f"the blockade mode needs a cost per edge or per cell "
+                             f"({', '.join(BLOCKADE_KINDS)}), not {kind!r}")
+        if factor <= 1 or cap <= 1:
+            raise ValueError("block_factor and block_cap must be > 1")
+        self.grid, self.cell = grid, kind == "cell"
+        self.factor, self.cap, self.retries = float(factor), float(cap), int(retries)
+
+    def costs(self, p):
+        return 1.0 + p[self.grid.edge_dst] if self.cell else p
+
+    def _index(self, edges):
+        return np.unique(self.grid.edge_dst[edges] if self.cell else np.asarray(edges))
+
+    def _get(self, p, idx):
+        return 1.0 + p[idx] if self.cell else p[idx]
+
+    def _set(self, p, idx, c):
+        p[idx] = c - 1.0 if self.cell else c
+
+    def update(self, p, pp_edges, expert_edges):
+        """Dearer PP's moves (not those the expert also makes), cheaper the expert's."""
+        good = self._index(expert_edges)
+        bad = np.setdiff1d(self._index(pp_edges), good)
+        self._set(p, good, np.maximum(1.0, self._get(p, good) / self.factor))
+        self._set(p, bad, np.minimum(self.cap, np.maximum(1.0, self._get(p, bad)) * self.factor))
+        return len(bad)
+
+    def relax(self, p, keep):
+        """Cost - 1 times ``keep`` (0.9 = 10% of every blockade fades per epoch)."""
+        if self.cell:
+            p *= keep
+        else:
+            p[:] = 1.0 + (p - 1.0) * keep
+
+    def state(self, planner, st, goals, order, p):
+        """One state: {deviated, fixed, failed, updates}; changes ``p`` in place."""
+        _, pos, nxt, _ = st
+        em = self.grid.edge_matrix
+        out = {"deviated": False, "fixed": False, "failed": False, "updates": 0}
+        for attempt in range(self.retries + 1):
+            try:
+                paths = planner.solve(pos, goals, order, self.costs(p))
+            except NoSolutionError:
+                out["failed"] = True
+                return out
+            ppn = next_moves(paths)
+            bad = [i for i in range(len(pos)) if ppn[i] != nxt[i]]
+            if not bad:
+                out["fixed"] = out["deviated"]
+                return out
+            out["deviated"] = True
+            if attempt == self.retries:
+                return out
+            out["updates"] += 1
+            self.update(p, [em[pos[i], ppn[i]] for i in bad], [em[pos[i], nxt[i]] for i in bad])
+        return out

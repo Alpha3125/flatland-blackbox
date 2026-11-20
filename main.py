@@ -194,9 +194,26 @@ def ask_hyperparameters(cfg):
     cfg["train_method"] = ask("    training method", cfg.get("train_method", "blackbox"), str,
                               ["blackbox", "sequential"])
     if cfg["train_method"] == "sequential":
-        cfg["seq_update"] = ask("    update after every deviating state (state) or once per "
-                                "batch (batch, parallel, faster)", cfg.get("seq_update", "state"),
-                                str, ["state", "batch"])
+        print("    sequential mode: gradient = the paper's black-box gradient at every")
+        print("                                deviating state")
+        print("                     blockade = aggressive: PP's deviating moves get much dearer")
+        print("                                (up to a near-blockade), the expert's cheaper,")
+        print("                                until PP follows the expert")
+        cfg["seq_mode"] = ask("    sequential mode", cfg.get("seq_mode", "gradient"), str,
+                              ["gradient", "blockade"])
+        if cfg["seq_mode"] == "gradient":
+            cfg["seq_update"] = ask("    update after every deviating state (state) or once per "
+                                    "batch (batch, parallel, faster)",
+                                    cfg.get("seq_update", "state"), str, ["state", "batch"])
+        else:
+            cfg["block_factor"] = ask("    blockade factor (deviating move cost x this)",
+                                      cfg.get("block_factor", 3.0), float)
+            cfg["block_cap"] = ask("    blockade cap (highest cost; ~a blockade)",
+                                   cfg.get("block_cap", 20.0), float)
+            cfg["block_retries"] = ask("    updates per state until PP follows the expert",
+                                       cfg.get("block_retries", 5), int)
+            cfg["block_relax"] = ask("    relax per epoch (cost - 1 times this; 1 = never fades)",
+                                     cfg.get("block_relax", 0.9), float)
     if cfg["model"] == "collision":
         init = dict(cfg.get("collision_init", {}))
         print("    collision model's starting strengths (0 = no effect; positive = dearer / "
@@ -357,6 +374,14 @@ def menu_sweep(cfg, n, info):
                                     cfg.get("train_method", "blackbox"), str),
         "seq_update": _ask_values("  sequential update (state / batch)",
                                   cfg.get("seq_update", "state"), str),
+        "seq_mode": _ask_values("  sequential mode (gradient / blockade)",
+                                cfg.get("seq_mode", "gradient"), str),
+        "block_factor": _ask_values("  blockade factor", cfg.get("block_factor", 3.0), float),
+        "block_cap": _ask_values("  blockade cap", cfg.get("block_cap", 20.0), float),
+        "block_retries": _ask_values("  blockade retries per state",
+                                     cfg.get("block_retries", 5), int),
+        "block_relax": _ask_values("  blockade relax per epoch", cfg.get("block_relax", 0.9),
+                                   float),
         "planner": _ask_values("  planner (pp / cbs / both)", cfg.get("planner", "both"), str),
         "objective": _ask_values("  objective (usage / makespan / usage+makespan)",
                                  cfg.get("objective", "usage"), str),
@@ -383,8 +408,15 @@ def menu_sweep(cfg, n, info):
     if any(v not in ("state", "batch") for v in grid_values["seq_update"]):
         print("  sequential update must be state or batch")
         return
+    if any(v not in ("gradient", "blockade") for v in grid_values["seq_mode"]):
+        print("  sequential mode must be gradient or blockade")
+        return
     if "sequential" not in grid_values["train_method"]:
-        grid_values["seq_update"] = grid_values["seq_update"][:1]  # only used by sequential
+        for k in ("seq_update", "seq_mode"):  # only used by sequential
+            grid_values[k] = grid_values[k][:1]
+    if "blockade" not in grid_values["seq_mode"]:
+        for k in ("block_factor", "block_cap", "block_retries", "block_relax"):
+            grid_values[k] = grid_values[k][:1]
     if any(v not in ("pp", "cbs", "both") for v in grid_values["planner"]):
         print("  planner must be pp, cbs or both")
         return
@@ -552,6 +584,7 @@ def interactive(config_path):
 HPARAMS = ("epochs", "batch_size", "lr", "lam", "loss_reduction", "w_min", "val_fraction",
            "seed", "device", "expert", "eecbs_bin", "cbs_time_limit", "objective",
            "makespan_tau", "makespan_weight", "planner", "model", "train_method", "seq_update",
+           "seq_mode", "block_factor", "block_cap", "block_retries", "block_relax",
            "pipeline_models", "pipeline_train", "pipeline_val", "pipeline_test",
            "pipeline_cbs_test", "pipeline_evals", "pipeline_plots", "pipeline_time_limit",
            "pipeline_variants")
@@ -596,6 +629,12 @@ def parse_args(argv=None):
     x.add_argument("--seq_update", choices=["state", "batch"],
                    help="sequential: optimizer step after every deviating state (default) or "
                         "once per batch (parallel)")
+    x.add_argument("--seq_mode", choices=["gradient", "blockade"],
+                   help="sequential: gradient (default) or blockade (aggressive: deviating moves "
+                        "get much dearer until PP follows the expert)")
+    for name, typ in (("block_factor", float), ("block_cap", float), ("block_retries", int),
+                      ("block_relax", float)):
+        x.add_argument(f"--{name}", type=typ)
     x.add_argument("--planner", choices=["pp", "cbs", "both"],
                    help="downstream planner the costs are learned for (default: config, both)")
     for name, typ in (("epochs", int), ("batch_size", int), ("lr", float), ("lam", float),
@@ -727,7 +766,7 @@ def main(argv=None):
                 raise SystemExit(f"cannot sweep '{key}'; choose from {', '.join(SWEEPABLE)}")
             words = ("pp", "cbs", "both", "mean", "sum", "usage", "makespan", "usage+makespan",
                      "edge", "potential", "potential_edge", "collision", "cell",
-                     "blackbox", "sequential", "state", "batch")
+                     "blackbox", "sequential", "state", "batch", "gradient", "blockade")
             grid_values[key] = [v if v in words else json.loads(v) for v in vals.split(",")]
         for n in agents:
             warn_cbs(grid_values.get("planner", cfg.get("planner")), n)

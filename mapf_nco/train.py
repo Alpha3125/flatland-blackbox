@@ -208,10 +208,14 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
     if method not in TRAIN_METHODS:
         raise ValueError(f"train_method must be one of {TRAIN_METHODS}, not {method!r}")
     seq_update = cfg.get("seq_update", "state")
+    seq_mode = cfg.get("seq_mode", "gradient")
     if method == "sequential":
-        from mapf_nco.sequential import SEQ_UPDATES, state_step, expert_states
+        from mapf_nco.sequential import (BLOCKADE_KINDS, SEQ_MODES, SEQ_UPDATES, Blockade,
+                                         expert_states, state_step)
         if seq_update not in SEQ_UPDATES:
             raise ValueError(f"seq_update must be one of {SEQ_UPDATES}, not {seq_update!r}")
+        if seq_mode not in SEQ_MODES:
+            raise ValueError(f"seq_mode must be one of {SEQ_MODES}, not {seq_mode!r}")
         if planner != "pp":
             raise ValueError("train_method 'sequential' learns from PP's deviations; use planner "
                              "pp (CBS models are trained with the 'blackbox' method)")
@@ -219,6 +223,12 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
     PL = planner.upper()
     set_seed(cfg.get("seed", 0))
     grid = Grid.from_file(cfg["map_path"])
+    blockade = method == "sequential" and seq_mode == "blockade"
+    if blockade and kind not in BLOCKADE_KINDS:
+        log(f"\n[train] n={n} {KIND_LABELS[kind]} model: SKIPPED, the blockade mode needs a "
+            f"cost per edge or per cell (model {' / '.join(BLOCKADE_KINDS)})")
+        _retire(cfg, grid.name, n, mid, log)
+        return None
     data, info = load_dataset(dataset_path(cfg["data_dir"], grid.name, n, "train"), grid)
     ename = "EECBS" if info.get("expert", "eecbs") == "eecbs" else "CBS"
     train_set, val_set = train_val_split(data, cfg["val_fraction"], cfg.get("seed", 0))
@@ -230,7 +240,10 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
         f"{len(val_set)} val "
         f"scenarios, {cfg['epochs']} epochs, batch {cfg['batch_size']}, lr {cfg['lr']}, "
         f"lambda {cfg['lam']}, method {method}"
-        + (f" (update per {seq_update})" if method == "sequential" else "")
+        + ((f" (blockade: x{cfg.get('block_factor', 3.0)}, cap {cfg.get('block_cap', 20.0)}, "
+            f"{cfg.get('block_retries', 5)} retries, relax {cfg.get('block_relax', 0.9)})"
+            if blockade else f" (gradient, update per {seq_update})")
+           if method == "sequential" else "")
         + f", objective {objective}" + ("" if objective == "usage" else
                                     f" (tau {obj['tau']}" + (f", weight {obj['beta']})"
                                     if objective == "usage+makespan" else ")")))
@@ -256,6 +269,8 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
     else:
         model = build_model(kind, grid).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=cfg["lr"])
+    blk = (Blockade(grid, kind, cfg.get("block_factor", 3.0), cfg.get("block_cap", 20.0),
+                    cfg.get("block_retries", 5)) if blockade else None)
     lam, reduction, B = cfg["lam"], cfg.get("loss_reduction", "mean"), cfg["batch_size"]
     y_star = [s.expert_usage(grid) for s in train_set]
 
@@ -352,10 +367,19 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
             losses, n_fail, n_zero = [], 0, 0
             bar = tqdm(range(0, len(idx), B), desc=f"epoch {epoch}/{cfg['epochs']}",
                        unit="batch", leave=False)
-            n_states = n_dev = 0
+            n_states = n_dev = n_fixed = n_upd = 0
             for k in bar:
                 bidx = idx[k:k + B]
                 batch_sc = [train_set[i] for i in bidx]
+                if blockade:
+                    st = _blockade_batch(model, kind, blk, batch_sc, grid, expert_states)
+                    n_states += st["states"]
+                    n_dev += st["deviations"]
+                    n_fixed += st["fixed"]
+                    n_upd += st["updates"]
+                    n_fail += st["failures"]
+                    bar.set_postfix(dev=f"{n_dev}/{n_states}", fixed=n_fixed)
+                    continue
                 if method == "sequential":
                     st = _sequential_batch(model, opt, batch_sc, runner, device, lam, reduction,
                                            obj, seq_update, grid, state_step, expert_states)
@@ -391,6 +415,10 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
                     batch_losses.append((epoch - 1 + (k + len(bidx)) / len(idx), float(np.mean(b_losses))))
                     tb.scalar("train/batch_loss", batch_losses[-1][1], step)
             bar.close()
+            if blockade:  # blockades fade unless they keep being needed
+                p = _cost_params(model, kind)
+                blk.relax(p, float(cfg.get("block_relax", 0.9)))
+                _set_cost_params(model, kind, p)
             vd, vs, vfails, vnodes = validate()
             val = score(vd, vs, vnodes)
             improved = val < best
@@ -402,7 +430,7 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
                 # comparable with epoch 0 and the blackbox method: the whole-plan loss;
                 # the loss at the deviating states is kept as state_loss
                 state_loss = float(np.mean(losses)) if losses else None
-                losses = [train_loss_now()] if n_dev else losses
+                losses = [train_loss_now()] if (n_dev or blockade) else losses
             history.append({
                 "epoch": epoch, "train_loss": float(np.mean(losses)) if losses else None,
                 "val_delay": vd, "val_makespan": vs, "val_failures": vfails,
@@ -412,13 +440,23 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
             if method == "sequential":
                 history[-1].update(states=n_states, deviating_states=n_dev,
                                    state_loss=state_loss)
+            if blockade:
+                c = blk.costs(_cost_params(model, kind))
+                history[-1].update(fixed_states=n_fixed, blockade_updates=n_upd,
+                                   edges_over_2=int((c > 2).sum()),
+                                   edges_at_cap=int((c >= blk.cap - 1e-6).sum()),
+                                   max_cost=float(c.max()))
             if planner == "cbs":
                 history[-1]["val_cbs_nodes"] = vnodes
             _log_epoch(tb, model, kind, history[-1], refs)
             log(f"  epoch {epoch:3d}  loss {_fmt(history[-1]['train_loss'])}  val delay {vd:7.2f}  "
                 f"makespan {vs:6.2f}" + (f"  CBS nodes {vnodes:7.1f}" if planner == "cbs" else "")
                 + f"{'  *best' if improved else '       '}  "
-                + (f"[deviating states {n_dev}/{n_states}, zero-grad {n_zero}/{n_dev}, "
+                + (f"[deviating states {n_dev}/{n_states}, fixed {n_fixed}, updates {n_upd}, "
+                   f"edges cost>2: {history[-1]['edges_over_2']} (at cap "
+                   f"{history[-1]['edges_at_cap']}), PP fails val {vfails}/train {n_fail}, "
+                   f"{time.time() - t0:.0f}s]" if blockade else
+                   f"[deviating states {n_dev}/{n_states}, zero-grad {n_zero}/{n_dev}, "
                    f"PP fails val {vfails}/train {n_fail}, {time.time() - t0:.0f}s]"
                    if method == "sequential" else
                    f"[{PL} fails val {vfails}/train {n_fail}, zero-grad {n_zero}/{len(idx)}, "
@@ -452,6 +490,35 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
     log(f"  loss graph:  {curves}")
     log(f"  tensorboard: tensorboard --logdir {os.path.dirname(tensorboard_dir(cfg, grid.name, n, mid))}")
     return ckpt
+
+
+def _cost_params(model, kind):
+    """The per-cell heat (cell model) or per-edge costs (Edge models) as a numpy copy."""
+    param = model.heat if kind == "cell" else model.edge_weights
+    return param.detach().cpu().double().numpy().copy()
+
+
+def _set_cost_params(model, kind, p):
+    param = model.heat if kind == "cell" else model.edge_weights
+    with torch.no_grad():
+        param.copy_(torch.from_numpy(np.asarray(p, dtype=np.float32)))
+
+
+def _blockade_batch(model, kind, blk, batch_sc, grid, expert_states):
+    """Blockade mode on one batch: every state in order, costs changed right away."""
+    p = _cost_params(model, kind)
+    planner = _PLANNERS["pp"]
+    out = {"states": 0, "deviations": 0, "fixed": 0, "updates": 0, "failures": 0}
+    for sc in batch_sc:
+        for st in expert_states(grid, sc):
+            r = blk.state(planner, st, sc.goals, sc.order, p)
+            out["states"] += 1
+            out["deviations"] += r["deviated"]
+            out["fixed"] += r["fixed"]
+            out["updates"] += r["updates"]
+            out["failures"] += r["failed"]
+    _set_cost_params(model, kind, p)
+    return out
 
 
 def _sequential_batch(model, opt, batch_sc, runner, device, lam, reduction, obj, seq_update,

@@ -449,12 +449,39 @@ Two additions to the paper's training, both selectable in option 2 (Experiment) 
     unchanged: PP plans each scenario once with the learned costs.
   - The training log shows `deviating states x/y` per epoch, which should fall as PP learns to follow the expert.
     The loss curve shows the whole-plan loss, so it is comparable with the paper's method.
+- **`seq_mode`** chooses how a deviating state changes the costs:
+  - `gradient` (default): the paper's loss and black-box gradient, as above. With the default `mean` loss and
+    λ = 1 the steps are tiny; use `loss_reduction: sum` and λ ≈ 20–50.
+  - `blockade` (aggressive, Edge and cell models only): the moves PP makes instead of the expert's get
+    `block_factor` (3) times dearer, up to `block_cap` (20, a near-blockade that stays passable), the expert's
+    moves `block_factor` times cheaper (not below 1), and PP replans from the same state until it follows the
+    expert or `block_retries` (5) updates are used up. After every epoch every cost relaxes towards 1
+    (cost − 1 times `block_relax`, 0.9). The log adds `fixed` (states PP follows after the blockades), `updates`
+    and how many edges cost more than 2.
+
+First check at 10 agents (80 training / 20 validation scenarios, 5 epochs, CBS expert; validation delay of plain
+PP 0.95, of the expert 0.50):
+
+| Sequential mode | Deviating states per epoch (of 3,236) | Validation delay |
+|---|---|---|
+| gradient, Edge (`sum`, λ = 20) | 683 → 473 | 0.85 at best (epoch 5) |
+| gradient, cell (`sum`, λ = 20) | 706 → 525 | no better than plain PP |
+| blockade ×3, cap 20, Edge | 1,811 → 1,630 | 18–37 (much worse; epoch 0 kept) |
+| blockade ×3, cap 20, cell | 1,731 → 1,709 | 15–26 (much worse; epoch 0 kept) |
+| blockade ×1.2, cap 1.5, Edge | 1,118 → 1,136 | 0.80–1.05 |
+
+The aggressive blockades backfire: the costs are one map shared by all scenarios, and PP treats a dear edge as
+a long road, so it detours around blockades in every other scenario. Most deviations at low agent counts are also
+just a different, equally short route, so blocking them blocks harmless moves. Validation selection protects the
+saved model (it keeps epoch 0, plain PP). Small factors and caps, which only break ties, don't hurt but don't
+clearly help either; the gradient mode is the one where PP measurably learns to follow the expert.
 
 Examples:
 
 ```
 python main.py experiment --agents 20 --model cell --train_method sequential
 python main.py sweep --agents 20 --grid model=edge,cell train_method=blackbox,sequential
+python main.py sweep --agents 20 --grid train_method=sequential seq_mode=gradient,blockade block_cap=1.5,20
 ```
 
 ## Potentials for CBS

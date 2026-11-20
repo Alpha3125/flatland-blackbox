@@ -96,6 +96,17 @@ def plan_all_timed(planner, sc, models, cbs=None):
     return plans, times, weights
 
 
+def _method(c):
+    """Training method of a checkpoint's config, for the plot header."""
+    m = c.get("train_method", "blackbox")
+    if m != "sequential":
+        return m
+    if c.get("seq_mode", "gradient") == "blockade":
+        return (f"sequential blockade (x{c.get('block_factor', 3.0)}, cap "
+                f"{c.get('block_cap', 20.0)}, relax {c.get('block_relax', 0.9)})")
+    return f"sequential gradient ({c.get('seq_update', 'state')})"
+
+
 def hparams_header(models, trained_n):
     """One-line summary of the training hyperparameters of the loaded models.
 
@@ -123,9 +134,7 @@ def hparams_header(models, trained_n):
     pls = [p for p in ("pp", "cbs") if any(planner_of(k) == p for k in models)]
     kinds = [KIND_LABELS[k] for k in KIND_LABELS if any(kind_of(m) == k for m in models)]
     parts = [f"model {' / '.join(kinds)}, planner {' + '.join(p.upper() for p in pls)}",
-             setting("method", lambda c: c.get("train_method", "blackbox")
-                     + (f" ({c.get('seq_update', 'state')})"
-                        if c.get("train_method") == "sequential" else "")),
+             setting("method", _method),
              setting("objective", objective), f"trained on {trained_n} agents",
              setting("epochs", lambda c: c.get("epochs")),
              setting("batch", lambda c: c.get("batch_size")),

@@ -42,7 +42,8 @@ from mapf_nco.scenarios import dataset_path, load_dataset, train_val_split
 from mapf_nco.metrics import edge_usage
 from mapf_nco.paths import (checkpoint_path, find_checkpoint, tensorboard_dir, training_dir,
                             training_file)
-from mapf_nco.planners import KIND_LABELS, LABELS, MODEL_IDS, model_id, training_runs
+from mapf_nco.planners import (KIND_LABELS, LABELS, MODEL_IDS, TRAIN_METHODS, model_id,
+                                training_runs)
 from mapf_nco.potential import describe
 from mapf_nco.solver_cbs import WeightedCBS
 from mapf_nco.solver_pp import NoSolutionError, PrioritizedPlanner
@@ -64,6 +65,15 @@ def _init_worker(map_path, w_min, cbs_time_limit=10.0, single_thread=True):
 def _step_task(args):
     starts, goals, order, w, y_star, lam, reduction, obj, pl = args
     return blackbox_step(_PLANNERS[pl], starts, goals, order, w, y_star, lam, reduction, **obj)
+
+
+def _seq_task(args):
+    """Sequential method, "batch" update: one scenario's deviating states with frozen costs."""
+    from mapf_nco.sequential import scenario_steps
+
+    sc, w, lam, reduction, obj = args
+    planner = _PLANNERS["pp"]
+    return scenario_steps(planner, planner.grid, sc, w, lam, reduction, obj)
 
 
 def _loss_task(args):
@@ -194,6 +204,17 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
         raise ValueError(f"planner must be pp or cbs, not {planner!r}")
     if kind not in KIND_LABELS:
         raise ValueError(f"model must be one of {', '.join(KIND_LABELS)}, not {kind!r}")
+    method = cfg.get("train_method", "blackbox")
+    if method not in TRAIN_METHODS:
+        raise ValueError(f"train_method must be one of {TRAIN_METHODS}, not {method!r}")
+    seq_update = cfg.get("seq_update", "state")
+    if method == "sequential":
+        from mapf_nco.sequential import SEQ_UPDATES, state_step, expert_states
+        if seq_update not in SEQ_UPDATES:
+            raise ValueError(f"seq_update must be one of {SEQ_UPDATES}, not {seq_update!r}")
+        if planner != "pp":
+            raise ValueError("train_method 'sequential' learns from PP's deviations; use planner "
+                             "pp (CBS models are trained with the 'blackbox' method)")
     mid = model_id(planner, kind)
     PL = planner.upper()
     set_seed(cfg.get("seed", 0))
@@ -208,7 +229,9 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
     log(f"[train] n={n} {KIND_LABELS[kind]} model, planner {PL}: {len(train_set)} train / "
         f"{len(val_set)} val "
         f"scenarios, {cfg['epochs']} epochs, batch {cfg['batch_size']}, lr {cfg['lr']}, "
-        f"lambda {cfg['lam']}, objective {objective}" + ("" if objective == "usage" else
+        f"lambda {cfg['lam']}, method {method}"
+        + (f" (update per {seq_update})" if method == "sequential" else "")
+        + f", objective {objective}" + ("" if objective == "usage" else
                                     f" (tau {obj['tau']}" + (f", weight {obj['beta']})"
                                     if objective == "usage+makespan" else ")")))
 
@@ -329,9 +352,26 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
             losses, n_fail, n_zero = [], 0, 0
             bar = tqdm(range(0, len(idx), B), desc=f"epoch {epoch}/{cfg['epochs']}",
                        unit="batch", leave=False)
+            n_states = n_dev = 0
             for k in bar:
                 bidx = idx[k:k + B]
                 batch_sc = [train_set[i] for i in bidx]
+                if method == "sequential":
+                    st = _sequential_batch(model, opt, batch_sc, runner, device, lam, reduction,
+                                           obj, seq_update, grid, state_step, expert_states)
+                    losses += st["losses"]
+                    n_states += st["states"]
+                    n_dev += st["deviations"]
+                    n_fail += st["failures"]
+                    n_zero += st["zero"]
+                    step += st["steps"]
+                    if st["losses"]:
+                        bar.set_postfix(loss=f"{np.mean(losses):.5f}",
+                                        dev=f"{n_dev}/{n_states}")
+                        batch_losses.append((epoch - 1 + (k + len(bidx)) / len(idx),
+                                             float(np.mean(st["losses"]))))
+                        tb.scalar("train/batch_loss", batch_losses[-1][1], step)
+                    continue
                 opt.zero_grad()
                 w = model(make_batch(batch_sc, device))  # (b, M): the same costs for each
                 w_np = w.detach().cpu().double().numpy()
@@ -358,20 +398,31 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
                 best, best_epoch = val, epoch
                 save_checkpoint(ckpt, model, kind, model_kwargs, n, grid, epoch, vd, cfg, vs,
                                 planner)
+            if method == "sequential":
+                # comparable with epoch 0 and the blackbox method: the whole-plan loss;
+                # the loss at the deviating states is kept as state_loss
+                state_loss = float(np.mean(losses)) if losses else None
+                losses = [train_loss_now()] if n_dev else losses
             history.append({
                 "epoch": epoch, "train_loss": float(np.mean(losses)) if losses else None,
                 "val_delay": vd, "val_makespan": vs, "val_failures": vfails,
                 "train_pp_failures": n_fail, "zero_grad_scenarios": n_zero,
                 "seconds": time.time() - t0,
             })
+            if method == "sequential":
+                history[-1].update(states=n_states, deviating_states=n_dev,
+                                   state_loss=state_loss)
             if planner == "cbs":
                 history[-1]["val_cbs_nodes"] = vnodes
             _log_epoch(tb, model, kind, history[-1], refs)
             log(f"  epoch {epoch:3d}  loss {_fmt(history[-1]['train_loss'])}  val delay {vd:7.2f}  "
                 f"makespan {vs:6.2f}" + (f"  CBS nodes {vnodes:7.1f}" if planner == "cbs" else "")
                 + f"{'  *best' if improved else '       '}  "
-                f"[{PL} fails val {vfails}/train {n_fail}, zero-grad {n_zero}/{len(idx)}, "
-                f"{time.time() - t0:.0f}s]")
+                + (f"[deviating states {n_dev}/{n_states}, zero-grad {n_zero}/{n_dev}, "
+                   f"PP fails val {vfails}/train {n_fail}, {time.time() - t0:.0f}s]"
+                   if method == "sequential" else
+                   f"[{PL} fails val {vfails}/train {n_fail}, zero-grad {n_zero}/{len(idx)}, "
+                   f"{time.time() - t0:.0f}s]"))
             if kind in ("potential", "collision"):
                 log(f"             {_strengths(kind, grid, model)}")
     finally:
@@ -401,6 +452,59 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
     log(f"  loss graph:  {curves}")
     log(f"  tensorboard: tensorboard --logdir {os.path.dirname(tensorboard_dir(cfg, grid.name, n, mid))}")
     return ckpt
+
+
+def _sequential_batch(model, opt, batch_sc, runner, device, lam, reduction, obj, seq_update,
+                      grid, state_step, expert_states):
+    """Sequential method on one batch (see mapf_nco/sequential.py).
+
+    "state": an optimizer step right after every deviating state (in this process, in
+    order); "batch": the batch's deviating states with frozen costs, in the workers, then
+    one step with their summed gradients divided by the number of scenarios.
+    """
+    out = {"losses": [], "states": 0, "deviations": 0, "failures": 0, "zero": 0, "steps": 0}
+    if seq_update == "batch":
+        opt.zero_grad()
+        w = model(make_batch(batch_sc, device))
+        w_np = w.detach().cpu().double().numpy()
+        res = runner.map(_seq_task, [(s, w_np[j], lam, reduction, obj)
+                                     for j, s in enumerate(batch_sc)])
+        for r in res:
+            out["states"] += r.states
+            out["deviations"] += r.deviations
+            out["failures"] += r.failures
+            out["zero"] += int(r.ok and not np.any(r.grad))
+            if r.ok:
+                out["losses"].append(r.loss)
+        if out["deviations"]:
+            grads = np.stack([r.grad for r in res]) / len(res)
+            w.backward(torch.from_numpy(grads).to(w.dtype).to(device))
+            opt.step()
+            out["steps"] = 1
+        return out
+    planner = _PLANNERS["pp"]  # the in-process planner (set up by PPRunner)
+    for sc in batch_sc:
+        for st in expert_states(grid, sc):
+            out["states"] += 1
+            with torch.no_grad():
+                w_np = model(make_batch([sc], device))[0].detach().cpu().double().numpy()
+            dev, r = state_step(planner, st, sc.goals, sc.order, w_np, lam, reduction, obj)
+            if dev is None:
+                out["failures"] += 1
+                continue
+            if not dev or r is None or not r.ok:
+                continue
+            out["deviations"] += 1
+            out["losses"].append(r.loss)
+            if not np.any(r.grad):
+                out["zero"] += 1
+                continue
+            opt.zero_grad()
+            w = model(make_batch([sc], device))
+            w.backward(torch.from_numpy(r.grad[None, :]).to(w.dtype).to(device))
+            opt.step()
+            out["steps"] += 1
+    return out
 
 
 def _strengths(kind, grid, model_or_theta):

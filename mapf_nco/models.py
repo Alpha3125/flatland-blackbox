@@ -7,6 +7,8 @@
   learnable strengths on fixed map features (closeness to obstructions,
   single-lane passages, dead ends) plus a learnable one-way preference per row
   and per column: w = 1 + F @ theta.
+* :class:`CellModel`: a learnable heat map, one value per cell; every step that ends
+  in a cell (a move into it or a wait in it) costs 1 + heat(cell).
 * :class:`CollisionModel` (see mapf_nco/collision.py): four learnable strengths
   on per-scenario collision features (individual shortest paths colliding, and
   the original PP plan's waits and close calls): w = 1 + F(scenario) @ theta.
@@ -25,7 +27,7 @@ import torch.nn as nn
 from mapf_nco.potential import feature_matrix, init_theta
 from mapf_nco.scenarios import scenario_arrays
 
-KINDS = ("edge", "potential", "potential_edge", "collision")
+KINDS = ("edge", "potential", "potential_edge", "collision", "cell")
 
 
 class EdgeModel(nn.Module):
@@ -58,6 +60,27 @@ class PotentialModel(nn.Module):
 
     def costs(self):
         return self.features @ self.theta + 1.0
+
+    def forward(self, batch):
+        B = batch["starts"].shape[0]
+        return self.costs().unsqueeze(0).expand(B, -1)
+
+
+class CellModel(nn.Module):
+    """A learned heat map: w_e = 1 + heat[destination cell of e] (waits included)."""
+
+    def __init__(self, grid, init=0.0):
+        super().__init__()
+        self.register_buffer("dst", torch.from_numpy(np.asarray(grid.edge_dst, dtype=np.int64)),
+                             persistent=False)
+        if np.ndim(init) == 0:
+            h = np.full(grid.num_nodes, float(init), dtype=np.float32)
+        else:
+            h = np.array(init, dtype=np.float32)
+        self.heat = nn.Parameter(torch.from_numpy(h))
+
+    def costs(self):
+        return self.heat[self.dst] + 1.0
 
     def forward(self, batch):
         B = batch["starts"].shape[0]
@@ -106,6 +129,8 @@ def build_model(kind, grid, init=None):
         return PotentialModel(grid, init)
     if kind == "collision":
         return CollisionModel(grid, init)
+    if kind == "cell":
+        return CellModel(grid, 0.0 if init is None else init)
     raise ValueError(f"Unknown model type: {kind} (choose from {', '.join(KINDS)})")
 
 

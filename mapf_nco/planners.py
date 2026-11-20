@@ -9,6 +9,14 @@
   "collision"       per scenario: dearer into cells where collisions happen (individual
                     shortest paths, the original PP plan's waits and close calls),
                     cheaper into clean cells; four learned strengths; see collision.py
+  "cell"            a learned heat map: one value per cell, every step in (or waiting in)
+                    the cell costs 1 + heat (models.CellModel)
+
+``cfg["train_method"]``: how the costs are trained (both use the paper's black-box gradient)
+  "blackbox"    the paper: the whole plan of each scenario vs the expert's (default)
+  "sequential"  Gelato-style: walk each scenario along the expert's plan, state by state;
+                wherever PP's next moves from that state deviate from the expert's, learn
+                from PP's remaining plan vs the expert's (mapf_nco/sequential.py)
 
 ``cfg["planner"]``: who uses the costs
   "pp"    Prioritized Planning (the paper)
@@ -22,10 +30,11 @@ e.g. edge, potential_edge_cbs.
 from __future__ import annotations
 
 PLANNER_CHOICES = ("pp", "cbs", "both")
-MODEL_CHOICES = ("edge", "potential", "potential_edge", "collision")
+MODEL_CHOICES = ("edge", "potential", "potential_edge", "collision", "cell")
+TRAIN_METHODS = ("blackbox", "sequential")
 KINDS = MODEL_CHOICES
 KIND_LABELS = {"edge": "Edge", "potential": "Potential", "potential_edge": "Potential+Edge",
-               "collision": "Collision"}
+               "collision": "Collision", "cell": "Cell heat map"}
 
 
 def model_id(planner, kind="edge"):
@@ -63,9 +72,12 @@ def kinds_of(setting):
 
 
 def training_runs(cfg):
-    """(kind, planner) pairs to train for this config, PP first."""
-    return [(k, p) for p in planners_of(cfg.get("planner", "both"))
-            for k in kinds_of(cfg.get("model", "edge"))]
+    """(kind, planner) pairs to train for this config, PP first. The sequential method
+    learns from PP's deviations, so it trains PP models only."""
+    planners = planners_of(cfg.get("planner", "both"))
+    if cfg.get("train_method", "blackbox") == "sequential":
+        planners = ["pp"]
+    return [(k, p) for p in planners for k in kinds_of(cfg.get("model", "edge"))]
 
 
 def model_ids(cfg):

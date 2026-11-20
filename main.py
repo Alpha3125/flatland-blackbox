@@ -36,8 +36,9 @@ import sys
 
 DEFAULT_CONFIG = "configs/paper.json"
 # Model ids accepted by test / evaluate --model (kept here so parsing needs no imports).
-MODEL_ID_CHOICES = ("edge", "potential", "potential_edge", "collision",
-                    "edge_cbs", "potential_cbs", "potential_edge_cbs", "collision_cbs")
+MODEL_ID_CHOICES = ("edge", "potential", "potential_edge", "collision", "cell",
+                    "edge_cbs", "potential_cbs", "potential_edge_cbs", "collision_cbs",
+                    "cell_cbs")
 
 
 # ------------------------------------------------------------------ config
@@ -183,8 +184,19 @@ def ask_hyperparameters(cfg):
     print("           potential_edge = potential first, then the Edge model starting from its costs")
     print("           collision      = per scenario: dearer into cells where collisions happen,")
     print("                            cheaper into clean cells (4 learned strengths)")
+    print("           cell           = a learned heat map: one cost per cell (every step into or")
+    print("                            waiting in a cell costs 1 + its heat)")
     cfg["model"] = ask("    model", cfg.get("model", "edge"), str,
-                       ["edge", "potential", "potential_edge", "collision"])
+                       ["edge", "potential", "potential_edge", "collision", "cell"])
+    print("    method: blackbox   = the paper: PP's whole plan vs the expert's, per scenario")
+    print("            sequential = Gelato-style: step along the expert's plan; at every state")
+    print("                         where PP's next moves deviate, learn from that state on")
+    cfg["train_method"] = ask("    training method", cfg.get("train_method", "blackbox"), str,
+                              ["blackbox", "sequential"])
+    if cfg["train_method"] == "sequential":
+        cfg["seq_update"] = ask("    update after every deviating state (state) or once per "
+                                "batch (batch, parallel, faster)", cfg.get("seq_update", "state"),
+                                str, ["state", "batch"])
     if cfg["model"] == "collision":
         init = dict(cfg.get("collision_init", {}))
         print("    collision model's starting strengths (0 = no effect; positive = dearer / "
@@ -209,7 +221,12 @@ def ask_hyperparameters(cfg):
     print("             cbs  = learn edge costs for CBS (optimal; Python CBS is slow beyond")
     print("                    ~25 agents: if it can't solve the scenarios, it is skipped)")
     print("             both = a separate model for each")
-    cfg["planner"] = ask("    planner", cfg.get("planner", "both"), str, ["pp", "cbs", "both"])
+    if cfg["train_method"] == "sequential":
+        print("    planner: pp (the sequential method learns from PP's deviations)")
+        cfg["planner"] = "pp"
+    else:
+        cfg["planner"] = ask("    planner", cfg.get("planner", "both"), str,
+                             ["pp", "cbs", "both"])
     if cfg["planner"] != "pp":
         cfg["cbs_train_time_limit"] = ask("    CBS time limit per call during training, seconds",
                                           cfg.get("cbs_train_time_limit", 10), float)
@@ -334,8 +351,12 @@ def menu_sweep(cfg, n, info):
             print("  (existing data will get its missing PP/CBS plans added)")
             cfg["augment"] = True
     grid_values = {
-        "model": _ask_values("  model (edge / potential / potential_edge / collision)",
+        "model": _ask_values("  model (edge / potential / potential_edge / collision / cell)",
                              cfg.get("model", "edge"), str),
+        "train_method": _ask_values("  training method (blackbox / sequential)",
+                                    cfg.get("train_method", "blackbox"), str),
+        "seq_update": _ask_values("  sequential update (state / batch)",
+                                  cfg.get("seq_update", "state"), str),
         "planner": _ask_values("  planner (pp / cbs / both)", cfg.get("planner", "both"), str),
         "objective": _ask_values("  objective (usage / makespan / usage+makespan)",
                                  cfg.get("objective", "usage"), str),
@@ -352,10 +373,18 @@ def menu_sweep(cfg, n, info):
         "val_fraction": _ask_values("  validation fraction", cfg["val_fraction"], float),
         "seed": _ask_values("  seed", cfg["seed"], int),
     }
-    if any(v not in ("edge", "potential", "potential_edge", "collision")
+    if any(v not in ("edge", "potential", "potential_edge", "collision", "cell")
            for v in grid_values["model"]):
-        print("  model must be edge, potential, potential_edge or collision")
+        print("  model must be edge, potential, potential_edge, collision or cell")
         return
+    if any(v not in ("blackbox", "sequential") for v in grid_values["train_method"]):
+        print("  training method must be blackbox or sequential")
+        return
+    if any(v not in ("state", "batch") for v in grid_values["seq_update"]):
+        print("  sequential update must be state or batch")
+        return
+    if "sequential" not in grid_values["train_method"]:
+        grid_values["seq_update"] = grid_values["seq_update"][:1]  # only used by sequential
     if any(v not in ("pp", "cbs", "both") for v in grid_values["planner"]):
         print("  planner must be pp, cbs or both")
         return
@@ -522,7 +551,7 @@ def interactive(config_path):
 # --------------------------------------------------------------- commands
 HPARAMS = ("epochs", "batch_size", "lr", "lam", "loss_reduction", "w_min", "val_fraction",
            "seed", "device", "expert", "eecbs_bin", "cbs_time_limit", "objective",
-           "makespan_tau", "makespan_weight", "planner", "model",
+           "makespan_tau", "makespan_weight", "planner", "model", "train_method", "seq_update",
            "pipeline_models", "pipeline_train", "pipeline_val", "pipeline_test",
            "pipeline_cbs_test", "pipeline_evals", "pipeline_plots", "pipeline_time_limit",
            "pipeline_variants")
@@ -556,10 +585,17 @@ def parse_args(argv=None):
     x = sub.add_parser("experiment",
                        help="train the Edge / Potential / Potential+Edge / Collision model")
     common(x)
-    x.add_argument("--model", choices=["edge", "potential", "potential_edge", "collision"],
+    x.add_argument("--model", choices=["edge", "potential", "potential_edge", "collision",
+                                       "cell"],
                    help="how the edge costs are learned (default: config, edge); set starting "
                         "strengths with --set potential_init='{\"toward\": 0.2}' or "
                         "collision_init='{\"naive\": 0.05}'")
+    x.add_argument("--train_method", choices=["blackbox", "sequential"],
+                   help="blackbox = the paper (default); sequential = Gelato-style, learn at "
+                        "every state where PP deviates from the expert")
+    x.add_argument("--seq_update", choices=["state", "batch"],
+                   help="sequential: optimizer step after every deviating state (default) or "
+                        "once per batch (parallel)")
     x.add_argument("--planner", choices=["pp", "cbs", "both"],
                    help="downstream planner the costs are learned for (default: config, both)")
     for name, typ in (("epochs", int), ("batch_size", int), ("lr", float), ("lam", float),
@@ -690,7 +726,8 @@ def main(argv=None):
             if key not in SWEEPABLE:
                 raise SystemExit(f"cannot sweep '{key}'; choose from {', '.join(SWEEPABLE)}")
             words = ("pp", "cbs", "both", "mean", "sum", "usage", "makespan", "usage+makespan",
-                     "edge", "potential", "potential_edge", "collision")
+                     "edge", "potential", "potential_edge", "collision", "cell",
+                     "blackbox", "sequential", "state", "batch")
             grid_values[key] = [v if v in words else json.loads(v) for v in vals.split(",")]
         for n in agents:
             warn_cbs(grid_values.get("planner", cfg.get("planner")), n)

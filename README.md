@@ -430,6 +430,33 @@ model is also trained for **CBS**, as a separate model (`model_edge_cbs.pt`).
 - **Testing:** when CBS models are loaded, the original CBS is also run live with the same time limit, so the
   times in the table compare fairly. The table gets a CBS (Edge) column.
 
+## Sequential (Gelato-style) training and the cell heat map
+
+Two additions to the paper's training, both selectable in option 2 (Experiment) and sweepable in option 5:
+
+- **`model: cell`**, a learned collision heat map: one value per cell, and every step that ends in a cell (a move
+  into it or a wait in it) costs 1 + heat(cell). About 800 parameters instead of the Edge model's 3,359; trained the
+  same way (the paper's black-box gradient flows to the cells it covers).
+- **`train_method: sequential`** (`mapf_nco/sequential.py`). The paper's method (`blackbox`, the default) compares
+  PP's whole plan of a scenario with the expert's. The sequential method walks each training scenario along the
+  expert's plan, one timestep (state) at a time. At every state, PP plans all agents from their current positions
+  with the current costs; **where PP's next moves deviate from the expert's**, the costs are updated with the
+  paper's loss and black-box gradient on the remaining plans (PP's from that state vs the expert's). Then it
+  continues from the expert's next state, whatever PP did. States where PP already agrees give no update.
+  - `seq_update: state` (default): an optimizer step right after every deviating state, in order (one process).
+  - `seq_update: batch`: the batch's deviating states with frozen costs, in parallel workers, one step per batch.
+  - It trains PP models only (with planner `both`, the CBS models are skipped). Validation and testing are
+    unchanged: PP plans each scenario once with the learned costs.
+  - The training log shows `deviating states x/y` per epoch, which should fall as PP learns to follow the expert.
+    The loss curve shows the whole-plan loss, so it is comparable with the paper's method.
+
+Examples:
+
+```
+python main.py experiment --agents 20 --model cell --train_method sequential
+python main.py sweep --agents 20 --grid model=edge,cell train_method=blackbox,sequential
+```
+
 ## Potentials for CBS
 
 The idea: learn edge costs that keep agents out of each other's way, cheaply with PP, and give them to CBS to

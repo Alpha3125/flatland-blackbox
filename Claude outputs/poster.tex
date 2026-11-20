@@ -1,0 +1,245 @@
+\documentclass[final]{beamer}
+
+% ====================
+% Packages
+% ====================
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[orientation=portrait,size=a0,scale=1.0]{beamerposter}
+\usetheme{gemini}
+\usecolortheme{nott}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.14}
+\usepackage{anyfontsize}
+\usepackage{xcolor}
+\usepackage[skip=2pt,font=normalsize]{subcaption}
+\usepackage{adjustbox}
+
+% ----------------------------------
+% For plotting study methodology
+% ----------------------------------
+
+\usetikzlibrary{shapes.geometric, arrows}
+
+% Defining Tickz Style
+\tikzstyle{startstop} = [rectangle, rounded corners, minimum width=3cm, minimum height=1cm, text centered, text width = 10cm, draw=black, fill=white]
+
+% \tikzstyle{io} = [trapezium, trapezium left angle=70, trapezium right angle=110, minimum width=3cm, minimum height=1cm, text centered, text width = 4.5cm, draw=black, fill=blue!30]
+
+\tikzstyle{process} = [rectangle, minimum width=3cm, minimum height=1cm, text centered, text width = 10cm, draw=black, fill=white]
+
+% \tikzstyle{decision} = [diamond, minimum width=3cm, minimum height=1cm, text centered, draw=black, fill=green!30]
+
+\tikzstyle{arrow} = [ultra thick,->,>=stealth]
+
+
+% ====================
+% Lengths
+% ====================
+
+% If you have N columns, choose \sepwidth and \colwidth such that
+% (N+1)*\sepwidth + N*\colwidth = \paperwidth
+\newlength{\sepwidth}
+\newlength{\colwidth}
+\setlength{\sepwidth}{0.025\paperwidth}
+\setlength{\colwidth}{0.4625\paperwidth}
+
+\newcommand{\separatorcolumn}{\begin{column}{\sepwidth}\end{column}}
+
+% ====================
+% Title
+% ====================
+
+\title{Neural Combinatorial Optimization for Multi-Agent Path Finding on Graphs}
+
+\author{\textbf{Your Name} \inst{1} \and Advisor/Collaborator \inst{1}}
+
+\institute[shortinst]{\inst{1} Your Institute / Lab}
+
+% ====================
+% Footer (optional)
+% ====================
+
+\footercontent{%
+  \textbf{Keywords:} MAPF \textbullet\ Graph neural networks \textbullet\ Neural combinatorial optimization \hfill
+  \textbf{Contact:} \href{mailto:your.email@provider.com}{your.email@provider.com}}
+% (can be left out to remove footer)
+
+
+% ====================
+% Logo (optional)
+% ====================
+
+% use this to include logos on the left and/or right side of the header:
+\logoright{\includegraphics[height=6.3cm]{logos/NHBNI_logo.png}}
+\logoleft{\includegraphics[height=7cm]{logos/NLogo-Grey.png}}
+
+% ====================
+% Body
+% ====================
+
+\begin{document}
+
+\begin{frame}[t]
+\begin{columns}[t]
+\separatorcolumn
+
+\begin{column}{\colwidth}
+
+% ----------------------------------
+% Abstract
+% ----------------------------------
+  \begin{block}{Abstract}
+    Multi-Agent Path Finding (MAPF) on graphs is NP-hard and classical solvers (CBS/EECBS, A*, prioritized planning) trade off optimality and runtime.
+    This work asks whether \textbf{graph neural networks} can be trained in a \textbf{(geometric) neural combinatorial optimization} (NCO) setting to improve \textbf{inference-time solution quality} for MAPF.
+    We replicate and stress-test a recent learning-to-reweight-edges approach, and identify regimes where learning is unstable or absent.
+  \end{block}
+
+% ----------------------------------
+% Section: Problem setup
+% ----------------------------------
+  \begin{block}{Problem setup: Graphs \& MAPF}
+    \textbf{Graph:} $G=(V,E,w)$, where $w_e$ is the (learned) edge cost.
+
+    \textbf{MAPF:} agents $\{A_1,\dots,A_k\}$ with start vertices $\{s_i\}\subset V$ and targets $\{t_i\}\subset V$.
+    A solution is a set of collision-free paths/policies $\{\pi_i\}$.
+
+    \heading{Neural Combinatorial Optimization (NCO)}
+    NCO uses a neural model to parameterize the optimization problem (e.g., edge weights) and relies on a downstream solver to produce a discrete plan.
+    \textbf{Geometric NCO} further exploits structure of the solution space to improve the solver output.
+  \end{block}
+
+% ----------------------------------
+% Section: Research question + objectives
+% ----------------------------------
+  \begin{alertblock}{Research question \& objectives}
+    \textbf{Question:} Can we train GNNs to obtain better MAPF solutions on graphs using a (geometric) NCO approach?
+
+    \vspace{0.4em}
+    \begin{itemize}
+      \item Learn an edge-cost function $w=\mathrm{NN}_\theta(G,\text{agents})$ that improves a fast heuristic solver (Prioritized Planner, PP).
+      \item Benchmark vs. stronger solvers (CBS/EECBS) for sum-of-costs (SOC), total distance, and makespan.
+      \item Study failure modes (e.g., instability / ``no learning'') and propose next fixes.
+    \end{itemize}
+  \end{alertblock}
+
+% ----------------------------------
+% Section: Related work
+% ----------------------------------
+  \begin{block}{Related work}
+    \begin{itemize}
+      \item \textbf{MAPF survey/benchmarks:} problem definitions and variants \cite{stern2019mapf}.
+      \item \textbf{GNN-based MAPF:} temporal-spatial aggregation with attention \cite{zhang2025gatmapf}.
+      \item \textbf{Edge-reweighting for MAPF:} learned representations that help a conventional solver \cite{captar2025learned}.
+      \item \textbf{Geometric NCO with constraints:} geometric post-processing/updates in discrete spaces \cite{karalias2025geometric}.
+    \end{itemize}
+  \end{block}
+
+% ----------------------------------
+% Section: Method overview
+% ----------------------------------
+ \begin{block}{Method overview (edge-reweighting + solver-in-the-loop)}
+    We learn edge weights $w_e$ so that a fast solver (PP) returns plans closer to an (expensive) reference solver (CBS/EECBS).
+
+    \vspace{0.4em}
+    \input{images/figure1}
+ \end{block}
+
+% -------------------------------
+% Section: Data \& practical challenges
+% -------------------------------
+\begin{block}{Data \& practical challenges}
+  \begin{itemize}
+    \item \textbf{Datasets:} synthetic/random graphs; grid maps; real road networks (e.g., SNAP RoadNet-PA; MovingAI).
+    \item \textbf{Road networks are huge:} slow to load/visualize; many connected components; high compute for message passing.
+    \item \textbf{Edge-level learning:} representation naturally targets edge costs/usage, but supervision is indirect via a planner.
+  \end{itemize}
+\end{block}
+
+\end{column}
+
+\separatorcolumn
+
+\begin{column}{\colwidth}
+
+% -------------------------------
+% Section: Results and discussion
+% -------------------------------
+
+\begin{block}{Reference formulation (from \cite{captar2025learned})}
+  We follow a solver-in-the-loop objective that learns edge costs.
+  Let $y\in\mathbb{N}^{|E|}$ be the edge-usage vector produced by a planner, and $w\in\mathbb{R}^{|E|}$ be learned edge costs.
+
+  \vspace{0.3em}
+  \begin{itemize}
+    \item Plan cost: $c(w,y)=\sum_{e\in E} w_e\, y_e$.
+    \item Discrete solve: $\hat y(w)=\arg\min_{y\in\mathcal{Y}} c(w,y)$ (PP solves this greedily, agent by agent).
+    \item Training signal: $L(\hat y)=\frac{1}{|E|}\sum_{e}(\hat y_e-y^*_e)^2$, with $y^*$ the reference plan from CBS/EECBS.
+    \item Gradient: black-box differentiation through the planner,
+      $\nabla_w L \approx -\frac{1}{\lambda}\big(\hat y(w)-\hat y(w+\lambda\,\partial L/\partial \hat y)\big)$, then backpropagated to $\theta$.
+  \end{itemize}
+\end{block}
+
+% -------------------------------
+% Section: Replication status
+% -------------------------------
+\begin{block}{Replication status}
+  \begin{itemize}
+    \item Reproduced the codebase (Flatland railroad variant) released by the authors.
+    \item Verified that CBS yields optimal SOC but is expensive; EECBS provides bounded suboptimality with lower runtime.
+    \item For small agent counts ($\sim 20$), CBS is often feasible; otherwise EECBS is the practical reference.
+  \end{itemize}
+\end{block}
+
+% -------------------------------
+% Section: Experimental observations
+% -------------------------------
+\begin{block}{Experimental observations (grids)}
+  \heading{Total distance \& makespan}
+  Learned edge costs sometimes reduce validation metrics, but curves can be noisy and sensitive to agent count.
+
+  \vspace{0.4em}
+  \input{images/figure2}
+
+  \heading{Failure case: ``no learning''}
+  In some runs, training stalls or oscillates.
+  Observed causes:
+  \begin{itemize}
+    \item \textbf{Vanishing surrogate gradient:} with a mean-reduced loss the perturbation $\lambda\,\partial L/\partial\hat y$ is $\sim 10^{-3}$, so PP's plan rarely changes and the gradient is zero for most scenarios.
+    \item \textbf{Loss--metric mismatch:} the usage loss penalises equally short routes that differ from the reference, so lower loss does not mean lower delay.
+    \item \textbf{Low-agent regime:} PP is already close to CBS, leaving little learning signal; validation noise then exceeds the effect.
+  \end{itemize}
+\end{block}
+
+% -------------------------------
+% Section: Conclusions + next steps
+% -------------------------------
+\begin{alertblock}{Conclusions \& next steps}
+  \begin{itemize}
+    \item Edge-reweighting is a simple NCO interface to MAPF (continuous parameters, discrete solver).
+    \item Replication suggests improvements are possible, but training can be unstable and highly regime-dependent.
+    \item Next: (i) focus on makespan-specific objectives, (ii) add geometric post-processing/updates, (iii) visualize solution-space structure on grid maps, (iv) scale via subgraph sampling for road networks.
+  \end{itemize}
+\end{alertblock}
+
+% -------------------------------
+% Section: References
+% ------------------------------- 
+
+\begin{block}{References}
+  \footnotesize{\bibliographystyle{plain}\bibliography{poster}}
+\end{block}
+
+\end{column}
+\separatorcolumn
+
+
+
+\end{columns}
+\end{frame}
+
+\end{document}

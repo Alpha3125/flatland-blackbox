@@ -123,6 +123,9 @@ def hparams_header(models, trained_n):
     pls = [p for p in ("pp", "cbs") if any(planner_of(k) == p for k in models)]
     kinds = [KIND_LABELS[k] for k in KIND_LABELS if any(kind_of(m) == k for m in models)]
     parts = [f"model {' / '.join(kinds)}, planner {' + '.join(p.upper() for p in pls)}",
+             setting("method", lambda c: c.get("train_method", "blackbox")
+                     + (f" ({c.get('seq_update', 'state')})"
+                        if c.get("train_method") == "sequential" else "")),
              setting("objective", objective), f"trained on {trained_n} agents",
              setting("epochs", lambda c: c.get("epochs")),
              setting("batch", lambda c: c.get("batch_size")),

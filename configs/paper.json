@@ -15,6 +15,8 @@
   "cbs_time_limit": 60,
 
   "model": "edge",
+  "train_method": "blackbox",
+  "seq_update": "state",
   "potential_init": {"near": 0.0, "toward": 0.2, "corridor": 0.2, "dead_end": 0.0, "lanes": 0.0},
   "collision_init": {"naive": 0.05, "gave_way": 0.05, "close_call": 0.03, "clean": 0.02},
   "planner": "both",

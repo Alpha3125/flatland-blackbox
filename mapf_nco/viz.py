@@ -320,6 +320,7 @@ MODEL_COLORS = {  # model id -> (dark, light)
     "potential_edge": ("#d62728", "#f4a6a6"), "edge_cbs": ("#17becf", "#a8e6ee"),
     "potential_cbs": ("#8c564b", "#d7c0bb"), "potential_edge_cbs": ("#e377c2", "#f6c9e9"),
     "collision": ("#8c6d31", "#e7cb94"), "collision_cbs": ("#393b79", "#9c9ede"),
+    "cell": ("#2ca02c", "#a1d99b"), "cell_cbs": ("#637939", "#cedb9c"),
 }
 
 

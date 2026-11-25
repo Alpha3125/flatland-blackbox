@@ -37,7 +37,7 @@ from mapf_nco.compare import CBS_TIMEOUT, LABELS, MODEL_IDS, REF, WEIGHT_LABELS,
 from mapf_nco.grid import Grid
 from mapf_nco.metrics import optimality_gap, sum_of_costs
 from mapf_nco.paths import fresh_dir, tensorboard_dir, test_dir, test_file
-from mapf_nco.scenarios import dataset_path, load_dataset
+from mapf_nco.scenarios import data_dir_for, dataset_path, load_dataset
 from mapf_nco.solver_cbs import WeightedCBS
 from mapf_nco.solver_pp import PrioritizedPlanner
 
@@ -50,7 +50,7 @@ def test_saved(cfg, n, num_instances=None, kinds=MODEL_IDS, plots=True, animate=
                log=print):
     """Test the models trained on ``n`` agents on the generated test scenarios."""
     grid = Grid.from_file(cfg["map_path"])
-    test, info = load_dataset(dataset_path(cfg["data_dir"], grid.name, n, "test"), grid)
+    test, info = load_dataset(dataset_path(data_dir_for(cfg), grid.name, n, "test"), grid)
     k = len(test) if not num_instances else min(int(num_instances), len(test))
     ename = "EECBS" if info.get("expert", "eecbs") == "eecbs" else "CBS"
     return run_test(cfg, grid, n, test[:k], ename, f"{k} saved test scenarios, {n} agents",

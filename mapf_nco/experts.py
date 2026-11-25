@@ -8,6 +8,7 @@ replaced, so the final dataset has exactly the requested size.
 
 from __future__ import annotations
 
+import copy
 import os
 import time
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
@@ -19,9 +20,11 @@ from mapf_nco.metrics import validate_solution
 from mapf_nco.scenarios import (
     Scenario,
     assign_priority_order,
+    data_dir_for,
     load_dataset,
     dataset_path,
     make_rng,
+    positions_of,
     random_scenario,
     save_dataset,
 )
@@ -133,8 +136,24 @@ def expert_options(cfg, grid, log=print):
     return expert, opts
 
 
-def make_scenarios(cfg, n, size, seed0, expert, opts, workers, desc="scenarios"):
-    """``size`` random scenarios with EECBS, PP and CBS plans (failed ones replaced)."""
+def repeat_scenario(sc, size):
+    """``size`` copies of one scenario (fixed start/goal positions); plans are copied."""
+    d = sc.to_dict()
+    d["meta"] = {k: v for k, v in d["meta"].items() if k != "copy"}
+    return [Scenario.from_dict(copy.deepcopy(dict(d, meta=dict(d["meta"], fixed_positions=True,
+                                                                copy=i))))
+            for i in range(size)]
+
+
+def make_scenarios(cfg, n, size, seed0, expert, opts, workers, desc="scenarios", fixed=False):
+    """``size`` random scenarios with EECBS, PP and CBS plans (failed ones replaced).
+
+    With ``fixed`` (fixed start/goal positions) one random scenario is solved and
+    repeated ``size`` times, so the expert, PP and CBS run only once.
+    """
+    if fixed:
+        (one,), attempts, w = make_scenarios(cfg, n, 1, seed0, expert, opts, workers, desc)
+        return repeat_scenario(one, size), attempts, w
     opts = dict(opts, suboptimality=suboptimality_for(n, cfg))
     results, next_seed = [], seed0
     with ProcessPoolExecutor(workers, initializer=_init_worker,
@@ -176,17 +195,25 @@ def generate_datasets(cfg, agent_counts, workers=None, log=print):
 
     With ``cfg["augment"]`` an existing dataset is kept and only the missing PP
     and CBS plans are added to it (EECBS plans are not recomputed).
+
+    With ``cfg["positions"] == "fixed"`` the data goes to <data_dir>/fixed_positions/
+    and every instance of an agent count, in train and test, is the same scenario:
+    it is solved once and repeated (see mapf_nco.scenarios.POSITIONS).
     """
     grid = Grid.from_file(cfg["map_path"])
     expert, opts = expert_options(cfg, grid, log)
     workers = workers or max(1, (os.cpu_count() or 2) - 1)
+    fixed = positions_of(cfg) == "fixed"
+    data_dir = data_dir_for(cfg)
 
     for n in agent_counts:
+        base = None  # fixed positions: the one scenario shared by train and test
+        train_seed = cfg.get("seed", 0) * 1_000_000 + n * 10_000
         for split, size, seed0 in (
-            ("train", cfg["num_train"], cfg.get("seed", 0) * 1_000_000 + n * 10_000),
-            ("test", cfg["num_test"], cfg.get("seed", 0) * 1_000_000 + n * 10_000 + 5_000),
+            ("train", cfg["num_train"], train_seed),
+            ("test", cfg["num_test"], train_seed + 5_000),
         ):
-            out = dataset_path(cfg["data_dir"], grid.name, n, split)
+            out = dataset_path(data_dir, grid.name, n, split)
             if os.path.exists(out) and cfg.get("augment"):
                 augment_dataset(cfg, out, grid, expert, opts, workers, log)
                 continue
@@ -195,19 +222,42 @@ def generate_datasets(cfg, agent_counts, workers=None, log=print):
                 continue
             label = (f"eecbs w={suboptimality_for(n, cfg)}" if expert == "eecbs"
                      else "python cbs")
-            log(f"[generate] n={n} {split}: {size} scenarios with {label}, plus PP and CBS "
-                f"plans ({workers} workers)")
             t0 = time.time()
-            scenarios, attempts, w = make_scenarios(cfg, n, size, seed0, expert, opts, workers,
-                                                    desc=f"n={n} {split}")
-            log(f"  solved {len(scenarios)}/{size} (attempts {attempts}, "
-                f"{time.time() - t0:.0f}s); {_cbs_summary(scenarios)}")
+            if fixed:
+                if base is None and not cfg.get("overwrite", False):
+                    base = _saved_fixed_scenario(data_dir, grid, n)  # keep train = test
+                attempts, w = 0, suboptimality_for(n, cfg)
+                if base is None:
+                    log(f"[generate] n={n}: fixed start/goal positions: one scenario with "
+                        f"{label}, plus PP and CBS plans")
+                    (base,), attempts, w = make_scenarios(cfg, n, 1, train_seed, expert, opts,
+                                                          workers, desc=f"n={n} fixed scenario")
+                scenarios = repeat_scenario(base, size)
+                log(f"  {split}: the fixed scenario {size} times; {_cbs_summary(scenarios[:1])}")
+            else:
+                log(f"[generate] n={n} {split}: {size} scenarios with {label}, plus PP and CBS "
+                    f"plans ({workers} workers)")
+                scenarios, attempts, w = make_scenarios(cfg, n, size, seed0, expert, opts,
+                                                        workers, desc=f"n={n} {split}")
+                log(f"  solved {len(scenarios)}/{size} (attempts {attempts}, "
+                    f"{time.time() - t0:.0f}s); {_cbs_summary(scenarios)}")
             save_dataset(out, grid, scenarios, info={
                 "num_agents": n, "split": split, "expert": expert, "suboptimality": w,
                 "time_limit": opts["time_limit"], "cbs_time_limit": opts["cbs_time_limit"],
-                "attempts": attempts,
+                "attempts": attempts, "positions": "fixed" if fixed else "randomized",
             })
             log(f"  saved {out}")
+
+
+def _saved_fixed_scenario(data_dir, grid, n):
+    """The fixed scenario of an agent count, if its train or test file already exists."""
+    for split in ("train", "test"):
+        path = dataset_path(data_dir, grid.name, n, split)
+        if os.path.exists(path):
+            scenarios, _ = load_dataset(path, grid)
+            if scenarios:
+                return scenarios[0]
+    return None
 
 
 def augment_dataset(cfg, path, grid, expert, opts, workers, log=print):

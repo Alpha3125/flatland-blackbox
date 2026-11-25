@@ -38,7 +38,7 @@ from tqdm import tqdm
 from mapf_nco.blackbox import blackbox_step, makespan_loss, usage_loss
 from mapf_nco.grid import Grid
 from mapf_nco.models import build_model, make_batch
-from mapf_nco.scenarios import dataset_path, load_dataset, train_val_split
+from mapf_nco.scenarios import data_dir_for, dataset_path, load_dataset, train_val_split
 from mapf_nco.metrics import edge_usage
 from mapf_nco.paths import (checkpoint_path, find_checkpoint, tensorboard_dir, training_dir,
                             training_file)
@@ -198,7 +198,7 @@ def train(cfg, n, planner="pp", workers=1, log=print, kind="edge"):
     PL = planner.upper()
     set_seed(cfg.get("seed", 0))
     grid = Grid.from_file(cfg["map_path"])
-    data, info = load_dataset(dataset_path(cfg["data_dir"], grid.name, n, "train"), grid)
+    data, info = load_dataset(dataset_path(data_dir_for(cfg), grid.name, n, "train"), grid)
     ename = "EECBS" if info.get("expert", "eecbs") == "eecbs" else "CBS"
     train_set, val_set = train_val_split(data, cfg["val_fraction"], cfg.get("seed", 0))
     objective = cfg.get("objective", "usage")

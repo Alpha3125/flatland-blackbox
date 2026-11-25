@@ -175,6 +175,18 @@ applies to the configured map (`map_path`, random-32-32-20); on the others it fo
 | `count_scale_2` | 40 | times the side-length ratio (the 64x64 maps are twice as long) |
 | `count_scale_4` | 80 | times the area ratio (4 times the cells: the same density) |
 
+**Start/goal positions** (setting `positions`, asked after the agent scaling):
+
+| Positions | Meaning |
+|---|---|
+| `randomized` (default) | new random starts and goals for every instance |
+| `fixed` | one random start/goal configuration per map and agent count, used by every instance (train, validation and test) and every experiment of the sweep |
+
+With `fixed`, the PP priority order follows from the positions (by distance), so every instance is the same
+problem: the expert, PP and CBS solve it only once, and each test uses one instance. It answers whether a model
+can learn one known problem, with no generalization to new scenarios needed. Its data is kept apart, in
+`data/scenarios/fixed_positions/`, and never mixes with the randomized data.
+
 Each map and agent count gets its own data (generated first if missing) and its own `<map>/n<N>/` folder inside
 every experiment folder. The 64x64 maps have about twice as long paths, so training there is slower, and with
 many agents Python CBS (planner `cbs`/`both`) times out and its models are skipped.
@@ -215,6 +227,7 @@ The same from the command line:
 python main.py sweep --agents 50 --grid lr=1e-4,5e-4 lam=0.5,1,2 --num 25    # add --second_agents 25 for a second test set
 python main.py sweep --agents 20 --agent_scaling count count_scale_4 --grid model=edge,cell   # all three maps
 python main.py sweep --agents 20 --maps random-32-32-20 --grid lr=1e-4,5e-4                 # one map only
+python main.py sweep --agents 15 --positions fixed --agent_scaling count_scale_2 --grid model=edge,cell
 ```
 
 Sweepable: model, planner, objective, makespan_tau, makespan_weight, epochs, batch_size, lr, lam, loss_reduction, w_min,
@@ -245,6 +258,9 @@ python main.py clean      --agents 50 --what agents       # or sweeps / pipeline
 data/scenarios/random-32-32-20/n50/
     train.json.gz, test.json.gz     generated INPUT data: scenarios, PP priority orders,
                                     and the EECBS, PP and CBS plans
+data/scenarios/fixed_positions/random-32-32-20/n50/
+    train.json.gz, test.json.gz     the same for fixed start/goal positions (one scenario,
+                                    repeated)
 outputs/random-32-32-20/n50/          every file starts with the name of its folder
     models/model_<model>.pt         trained PP models: model_edge.pt, model_potential.pt, ... (the
                                     epoch with the best validation delay, or makespan for a makespan

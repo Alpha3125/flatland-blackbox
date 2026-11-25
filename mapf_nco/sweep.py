@@ -12,6 +12,17 @@ the configured map (random-32-32-20):
 Each (map, agent count) gets its own data (generated if missing) and its own
 <map>/n<N>/ folder inside every experiment folder.
 
+Start/goal positions (``positions``):
+
+    randomized      new random starts and goals for every instance (default)
+    fixed           one random start/goal configuration per (map, agent count), used by
+                    every instance -- train, validation and test -- and by every
+                    experiment of the sweep. The PP priority order follows from the
+                    positions, so every instance is the same problem: the expert, PP and
+                    CBS solve it once, and each test uses one instance. This shows
+                    whether a model can learn one known problem (no generalization
+                    needed). Its data is kept apart, in <data_dir>/fixed_positions/.
+
 For every combination of the hyperparameter values given (a grid search), the
 chosen model (``model``: edge / potential / potential_edge / collision / cell) is
 trained from scratch, for PP, CBS or both (``planner``), and then tested on
@@ -52,7 +63,7 @@ import time
 
 from mapf_nco.grid import Grid
 from mapf_nco.planners import KIND_LABELS, MODEL_IDS, kind_of, model_ids, planner_of
-from mapf_nco.scenarios import load_dataset, save_dataset
+from mapf_nco.scenarios import load_dataset, positions_of, save_dataset
 
 # Hyperparameters that can be swept.
 SWEEPABLE = ("model", "planner", "objective", "makespan_tau", "makespan_weight", "epochs", "batch_size",
@@ -155,6 +166,10 @@ def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=
 
     targets = sweep_targets(cfg, n, maps, scalings)
     workers = workers or max(1, (os.cpu_count() or 2) - 1)
+    positions = positions_of(cfg)
+    fixed = positions == "fixed"
+    if fixed:
+        test_count = 1  # every test instance is the same scenario
     experiments = expand_grid(grid_values)
     root = next_sweep_dir(os.path.join(cfg["output_dir"], "sweeps"))
     varying = [k for k, v in grid_values.items() if len(v) > 1]
@@ -162,6 +177,8 @@ def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=
     log(f"[sweep] {len(experiments)} experiment(s) on "
         + "; ".join(f"{t['grid'].name} with {t['agents']} agents" for t in targets)
         + (f"; second test on {second_n} agents (scaled per map)" if second_n else "")
+        + f"; start/goal positions: {positions}"
+        + (" (one scenario per map and agent count, tested on 1 instance)" if fixed else "")
         + f". Results: {root}")
 
     ename = "EECBS" if cfg.get("expert", "eecbs") == "eecbs" else "CBS"
@@ -173,13 +190,14 @@ def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=
         t["second"] = None
         if second_n:
             expert, opts = expert_options(tcfg, t["grid"], log)
-            test_size = second_count or test_count or cfg.get("num_test", 25)
+            test_size = 1 if fixed else second_count or test_count or cfg.get("num_test", 25)
             path = os.path.join(root, f"second_test_{t['grid'].name}_n{t['second_n']}.json.gz")
             sc, _, _ = make_scenarios(tcfg, t["second_n"], test_size, 20_000_000 + second_seed,
                                       expert, opts, workers,
                                       desc=f"second test set ({t['grid'].name}, "
-                                           f"{t['second_n']} agents)")
-            save_dataset(path, t["grid"], sc, info={"num_agents": t["second_n"], "expert": expert})
+                                           f"{t['second_n']} agents)", fixed=fixed)
+            save_dataset(path, t["grid"], sc, info={"num_agents": t["second_n"], "expert": expert,
+                                                    "positions": positions})
             t["second"], _ = load_dataset(path, t["grid"])
     tags = ["test"] + (["second"] if second_n else [])
 
@@ -194,7 +212,7 @@ def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=
             ecfg = apply_settings(dict(cfg, map_path=t["map_path"]), settings)
             ecfg["output_dir"] = os.path.join(root, folder)
             row = {"experiment": name, "map": grid.name, "agents": tn,
-                   "scaling": "/".join(t["scalings"]), **settings}
+                   "scaling": "/".join(t["scalings"]), "positions": positions, **settings}
             if t["second_n"]:
                 row["second_agents"] = t["second_n"]
             t0 = time.time()
@@ -207,8 +225,10 @@ def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=
             summaries = [s1]
             if t["second"] is not None:
                 summaries.append(run_test(ecfg, grid, tn, t["second"], ename,
-                                          f"{len(t['second'])} new random scenarios, "
-                                          f"{t['second_n']} agents", ids, True, animate, log,
+                                          (f"the fixed scenario of {t['second_n']} agents"
+                                           if fixed else f"{len(t['second'])} new random "
+                                           f"scenarios, {t['second_n']} agents"),
+                                          ids, True, animate, log,
                                           out_name=f"test_n{t['second_n']}"))
             row.update(_best_epochs(ecfg, grid, tn, ids))
             for tag, s in zip(tags, summaries):
@@ -339,7 +359,10 @@ def _write_summary(root, rows, tags, ename):
         targets = ", ".join(f"{m} ({a} agents)"
                             for m, a in dict.fromkeys((r["map"], r["agents"]) for r in rows))
         sets = " and ".join(TAG_NAMES[t].strip("()") for t in tags)
-        f.write(f"# Sweep: {targets}\n\nAverage delay and makespan on the {sets} of each map. "
+        pos = ("Start/goal positions: **fixed** (one scenario per map and agent count, used for "
+               "training, validation and test).\n\n" if rows[0].get("positions") == "fixed"
+               else "Start/goal positions: randomized (new for every instance).\n\n")
+        f.write(f"# Sweep: {targets}\n\n{pos}Average delay and makespan on the {sets} of each map. "
                 f"PP columns: original PP / learned PP / {ename}; "
                 f"CBS columns: original CBS / CBS with learned costs. Lower is better.\n\n"
                 + "\n".join(lines) + "\n")

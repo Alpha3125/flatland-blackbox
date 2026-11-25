@@ -154,6 +154,29 @@ def dataset_path(data_dir, map_name, num_agents, split):
     return os.path.join(data_dir, map_name, f"n{num_agents}", f"{split}.json.gz")
 
 
+# Start/goal positions of the instances (config key ``positions``):
+#   randomized  new random starts and goals for every instance (default)
+#   fixed       one random start/goal configuration per map and agent count, used by
+#               every instance (train, validation and test); with the paper's priority
+#               order (by distance) every instance is then the same problem
+POSITIONS = ("randomized", "fixed")
+
+
+def positions_of(cfg):
+    p = cfg.get("positions", "randomized")
+    if p not in POSITIONS:
+        raise ValueError(f"positions must be {' or '.join(POSITIONS)}, not {p!r}")
+    return p
+
+
+def data_dir_for(cfg):
+    """The dataset folder: data_dir, or data_dir/fixed_positions for fixed positions
+    (so the two kinds of data never mix)."""
+    if positions_of(cfg) == "fixed":
+        return os.path.join(cfg["data_dir"], "fixed_positions")
+    return cfg["data_dir"]
+
+
 # --------------------------------------------------------- MovingAI .scen I/O
 def write_scen(path, grid, starts, goals):
     """Write a MovingAI ``.scen`` file (x = column, y = row), as read by EECBS."""

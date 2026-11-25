@@ -318,7 +318,7 @@ def _ask_values(prompt, default, cast):
 
 
 def menu_sweep(cfg, n, info):
-    from mapf_nco.scenarios import dataset_path
+    from mapf_nco.scenarios import POSITIONS, data_dir_for, dataset_path
     from mapf_nco.sweep import (ALL_MAPS, SCALINGS, expand_grid, run_sweep,
                                 second_agent_count, sweep_targets)
 
@@ -348,8 +348,15 @@ def menu_sweep(cfg, n, info):
         print(f"  {e}")
         return
     print("  runs on: " + "; ".join(f"{t['grid'].name} with {t['agents']} agents" for t in targets))
+    print("  start/goal positions:")
+    print("    randomized = new random starts and goals for every instance")
+    print("    fixed      = one start/goal configuration per map and agent count, used by every")
+    print("                 instance (train, validation, test) and every experiment")
+    cfg["positions"] = ask("  start/goal positions (randomized / fixed)",
+                           cfg.get("positions", "randomized"), str, POSITIONS)
+    fixed = cfg["positions"] == "fixed"
     missing = [t for t in targets if not all(
-        os.path.exists(dataset_path(cfg["data_dir"], t["grid"].name, t["agents"], split))
+        os.path.exists(dataset_path(data_dir_for(cfg), t["grid"].name, t["agents"], split))
         for split in ("train", "test"))]
     if missing:
         print("  No data yet for: " + "; ".join(f"{t['grid'].name} {t['agents']} agents"
@@ -390,14 +397,18 @@ def menu_sweep(cfg, n, info):
         return
     warn_cbs(grid_values["planner"], max(t["agents"] for t in targets))
     k = len(expand_grid(grid_values))
-    test_count = ask("  Test scenarios per experiment and map (from the saved test set)",
-                     min(3, info["test"] or cfg["num_test"]), int)
+    if fixed:  # every instance is the same scenario
+        test_count = 1
+    else:
+        test_count = ask("  Test scenarios per experiment and map (from the saved test set)",
+                         min(3, info["test"] or cfg["num_test"]), int)
     second_n = second_count = None
     if ask_yes("  Also test on a second set with a different number of agents?", False):
         second_n = ask(f"  Agents in the second test set (on "
                        f"{os.path.splitext(os.path.basename(cfg['map_path']))[0]}; scaled like "
                        "the training count on the other maps)", second_agent_count(n, cfg), int)
-        second_count = ask("  Scenarios in the second test set", test_count, int)
+        if not fixed:
+            second_count = ask("  Scenarios in the second test set", test_count, int)
     animate = ask_yes("  Save animations too (slower)?", False)
     workers = ask("  Parallel workers", default_workers(), int)
     print(f"\n  {k} experiment(s) x {len(targets)} map(s) x (train the model(s) per planner + "
@@ -626,6 +637,10 @@ def parse_args(argv=None):
                                                           "count_scale_4"],
                    help="agents on the other maps: the same count, x side ratio (x2 on 64x64) "
                         "or x area ratio (x4); several to compare")
+    w.add_argument("--positions", choices=["randomized", "fixed"],
+                   help="start/goal positions: randomized = new for every instance (default); "
+                        "fixed = one configuration per map and agent count for every instance "
+                        "and experiment")
     w.add_argument("--expert", choices=["eecbs", "cbs"])
     w.add_argument("--eecbs_bin")
 
@@ -725,6 +740,8 @@ def main(argv=None):
             grid_values[key] = [v if v in words else json.loads(v) for v in vals.split(",")]
         maps = args.maps or cfg.get("sweep_maps", list(ALL_MAPS))
         scalings = args.agent_scaling or cfg.get("agent_scaling", ["count"])
+        if args.positions:
+            cfg["positions"] = args.positions
         for n in agents:
             warn_cbs(grid_values.get("planner", cfg.get("planner")), n)
             run_sweep(cfg, n, grid_values or {"lr": [cfg["lr"]]}, args.num, args.second_agents,

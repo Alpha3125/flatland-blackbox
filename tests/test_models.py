@@ -93,9 +93,28 @@ def _tiny_setup(grid, tmp_path):
     return cfg
 
 
+def test_cell_model_costs_and_gradient(grid):
+    from mapf_nco.models import CellModel
+    from mapf_nco.scenarios import Scenario
+
+    assert isinstance(build_model("cell", grid), CellModel)
+    h = np.random.default_rng(0).uniform(-0.2, 0.5, grid.num_nodes).astype(np.float32)
+    m = build_model("cell", grid, init=h)
+    sc = Scenario(starts=[0], goals=[1], order=[0])
+    w = m(make_batch([sc, sc]))
+    assert w.shape == (2, grid.num_edges)
+    assert np.allclose(w[0].detach().numpy(), 1 + h[grid.edge_dst], atol=1e-6)
+    g = np.random.default_rng(1).standard_normal((2, grid.num_edges)).astype(np.float32)
+    w.backward(torch.from_numpy(g))
+    expected = np.zeros(grid.num_nodes)
+    np.add.at(expected, grid.edge_dst, g.sum(0))
+    assert np.allclose(m.heat.grad.numpy(), expected, atol=1e-4)
+    assert list(m.state_dict()) == ["heat"]  # the edge -> cell map is rebuilt from the grid
+
+
 @pytest.mark.parametrize("planner,kinds", [(p, k) for p in ("pp", "cbs")
                                            for k in (("edge",), ("potential", "potential_edge"),
-                                                     ("collision",))])
+                                                     ("collision",), ("cell",))])
 def test_train_and_evaluate_smoke(grid, tmp_path, planner, kinds):
     from mapf_nco.evaluate import evaluate, format_table
     from mapf_nco.planners import model_id

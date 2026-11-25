@@ -85,7 +85,7 @@ def makespan_perturbation(planner, starts, goals, w, alpha, min_alpha=1e-3):
 
 
 def blackbox_step(planner: PrioritizedPlanner, starts, goals, order, w, y_star,
-                  lam=1.0, reduction="mean", objective="usage", tau=1.0, beta=1.0, paths=None):
+                  lam=1.0, reduction="mean", objective="usage", tau=1.0, beta=1.0):
     """Forward pass, perturbed pass and surrogate gradient for one scenario.
 
     objective:
@@ -97,15 +97,13 @@ def blackbox_step(planner: PrioritizedPlanner, starts, goals, order, w, y_star,
     every agent, so dL/dw is the sum of the per-agent Pogancic gradients, i.e.
     -(y_hat - y_lam)/lambda on the total usage. The usage loss perturbs every
     agent's costs equally (Eq. 5). For the makespan loss see
-    :func:`makespan_perturbation`. ``paths``: the planner's plan under ``w`` if
-    already known (it is then not planned again).
+    :func:`makespan_perturbation`.
     """
     w = np.asarray(w, dtype=np.float64)
     zero = np.zeros_like(w)
     t0 = time.perf_counter()
     try:
-        if paths is None:
-            paths = planner.solve(starts, goals, order, w)
+        paths = planner.solve(starts, goals, order, w)
     except NoSolutionError:
         return BlackBoxResult(float("nan"), zero, False, False, -1, time.perf_counter() - t0)
     pp_time = time.perf_counter() - t0

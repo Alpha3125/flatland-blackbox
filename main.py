@@ -102,13 +102,14 @@ def open_file(path):
 def status(cfg, n):
     from mapf_nco.grid import Grid
     from mapf_nco.paths import find_checkpoint, run_dir
-    from mapf_nco.scenarios import dataset_path, load_dataset
+    from mapf_nco.scenarios import data_dir_for, dataset_path, load_dataset, positions_of
 
     grid = Grid.from_file(cfg["map_path"])
     info = {"grid": grid}
-    print(f"\n--- {grid.name}, {n} agents ---")
+    print(f"\n--- {grid.name}, {n} agents"
+          + (", fixed start/goal positions" if positions_of(cfg) == "fixed" else "") + " ---")
     for split in ("train", "test"):
-        p = dataset_path(cfg["data_dir"], grid.name, n, split)
+        p = dataset_path(data_dir_for(cfg), grid.name, n, split)
         if os.path.exists(p):
             scs, meta = load_dataset(p, grid)
             info[split] = len(scs)
@@ -361,8 +362,9 @@ def menu_sweep(cfg, n, info):
     if missing:
         print("  No data yet for: " + "; ".join(f"{t['grid'].name} {t['agents']} agents"
                                                for t in missing) + " (generated first).")
-        cfg["num_train"] = ask("  Number of training scenarios", cfg["num_train"], int)
-        cfg["num_test"] = ask("  Number of test scenarios", cfg["num_test"], int)
+        copies = " (copies of the fixed scenario)" if fixed else ""
+        cfg["num_train"] = ask(f"  Number of training scenarios{copies}", cfg["num_train"], int)
+        cfg["num_test"] = ask(f"  Number of test scenarios{copies}", cfg["num_test"], int)
     grid_values = {
         "model": _ask_values("  model (edge / potential / potential_edge / collision / cell)",
                              cfg.get("model", "edge"), str),

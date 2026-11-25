@@ -4,6 +4,10 @@ For every agent count n we sample random start/goal scenarios on the map, fix
 their PP priority order, and solve them with the expert (EECBS by default).
 Scenarios the expert cannot solve within the time limit are discarded and
 replaced, so the final dataset has exactly the requested size.
+
+With fixed start/goal positions (config ``positions: fixed``) one such scenario
+is solved and repeated for every train and test instance, in
+<data_dir>/fixed_positions/ (see mapf_nco.scenarios.POSITIONS).
 """
 
 from __future__ import annotations
@@ -226,13 +230,16 @@ def generate_datasets(cfg, agent_counts, workers=None, log=print):
             if fixed:
                 if base is None and not cfg.get("overwrite", False):
                     base = _saved_fixed_scenario(data_dir, grid, n)  # keep train = test
-                attempts, w = 0, suboptimality_for(n, cfg)
                 if base is None:
                     log(f"[generate] n={n}: fixed start/goal positions: one scenario with "
                         f"{label}, plus PP and CBS plans")
-                    (base,), attempts, w = make_scenarios(cfg, n, 1, train_seed, expert, opts,
-                                                          workers, desc=f"n={n} fixed scenario")
-                scenarios = repeat_scenario(base, size)
+                    (sc,), attempts, w = make_scenarios(cfg, n, 1, train_seed, expert, opts,
+                                                        workers, desc=f"n={n} fixed scenario")
+                    base = (sc, attempts, w)
+                    log(f"  solved (attempts {attempts}, {time.time() - t0:.0f}s)")
+                sc, attempts, w = base
+                w = suboptimality_for(n, cfg) if w is None else w
+                scenarios = repeat_scenario(sc, size)
                 log(f"  {split}: the fixed scenario {size} times; {_cbs_summary(scenarios[:1])}")
             else:
                 log(f"[generate] n={n} {split}: {size} scenarios with {label}, plus PP and CBS "
@@ -250,13 +257,14 @@ def generate_datasets(cfg, agent_counts, workers=None, log=print):
 
 
 def _saved_fixed_scenario(data_dir, grid, n):
-    """The fixed scenario of an agent count, if its train or test file already exists."""
+    """(scenario, attempts, suboptimality) of an agent count's fixed scenario, if its
+    train or test file already exists, else None."""
     for split in ("train", "test"):
         path = dataset_path(data_dir, grid.name, n, split)
         if os.path.exists(path):
-            scenarios, _ = load_dataset(path, grid)
+            scenarios, info = load_dataset(path, grid)
             if scenarios:
-                return scenarios[0]
+                return scenarios[0], info.get("attempts", 0), info.get("suboptimality")
     return None
 
 
@@ -270,7 +278,11 @@ def augment_dataset(cfg, path, grid, expert, opts, workers, log=print):
         return
     n = scenarios[0].num_agents
     o = dict(opts, suboptimality=float(info.get("suboptimality", suboptimality_for(n, cfg))))
-    log(f"[generate] {path}: adding PP/CBS plans to {len(todo)} scenarios")
+    fixed = all(s.meta.get("fixed_positions") for s in scenarios)
+    if fixed:  # copies of one scenario: add the plans once
+        todo = todo[:1]
+    log(f"[generate] {path}: adding PP/CBS plans to "
+        + ("the fixed scenario" if fixed else f"{len(todo)} scenarios"))
     with ProcessPoolExecutor(workers, initializer=_init_worker,
                              initargs=(cfg["map_path"],)) as pool:
         tasks = [(scenarios[i].to_dict(), info.get("expert", expert), o) for i in todo]
@@ -278,6 +290,8 @@ def augment_dataset(cfg, path, grid, expert, opts, workers, log=print):
                          desc="adding plans", unit="scen"))
     for i, d in zip(todo, done):
         scenarios[i] = Scenario.from_dict(d)
+    if fixed:
+        scenarios = repeat_scenario(scenarios[todo[0]], len(scenarios))
     info["cbs_time_limit"] = o["cbs_time_limit"]
     save_dataset(path, grid, scenarios, info=info)
     log(f"  {_cbs_summary(scenarios)}; saved {path}")

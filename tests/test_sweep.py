@@ -114,6 +114,18 @@ def test_fixed_positions_data(tmp_path):
     test, _ = load_dataset(dataset_path(data_dir_for(cfg), grid.name, 4, "test"), grid)
     assert len(test) == 2 and test[0].starts == train[0].starts
 
+    # missing plans are added to the fixed scenario once, and the copies stay identical
+    from mapf_nco.scenarios import save_dataset
+
+    path = dataset_path(data_dir_for(cfg), grid.name, 4, "train")
+    for sc in train:
+        sc.pp_paths = None
+    save_dataset(path, grid, train, info)
+    generate_datasets(dict(cfg, augment=True), [4], workers=1, log=lambda *a: None)
+    again, info2 = load_dataset(path, grid)
+    assert len(again) == 5 and info2["positions"] == "fixed"
+    assert all(s.to_dict()["pp_paths"] == first["pp_paths"] for s in again)
+
     rnd = dict(cfg, positions="randomized")
     generate_datasets(rnd, [4], workers=1, log=lambda *a: None)
     train_r, _ = load_dataset(dataset_path(data_dir_for(rnd), grid.name, 4, "train"), grid)

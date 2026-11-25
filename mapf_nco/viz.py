@@ -422,7 +422,7 @@ def plot_test_summary(per_instance, methods, out_path, title, expert_name="EECBS
     return _save(fig, out_path, dpi=130)
 
 
-def plot_sweep_summary(rows, tags, out_path):
+def plot_sweep_summary(rows, tags, out_path, expert_name="EECBS"):
     """Test delay of every experiment, one panel per (map, agents) and test set, with the
     original PP / CBS / expert reference lines of that map."""
     import numpy as np
@@ -452,7 +452,7 @@ def plot_sweep_summary(rows, tags, out_path):
             if np.isfinite(cbs):
                 ax.axhline(cbs, color="#6a51a3", ls="-.", label="original CBS")
             if np.isfinite(ref.get(f"{tag}_expert_delay", float("nan"))):
-                ax.axhline(ref[f"{tag}_expert_delay"], color="green", ls=":", label="EECBS")
+                ax.axhline(ref[f"{tag}_expert_delay"], color="green", ls=":", label=expert_name)
             ax.set_xticks(x)
             ax.set_xticklabels(names)
             ax.set_xlabel("experiment (see sweep_summary.md for its settings)")

@@ -225,7 +225,8 @@ def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=
             rows.append(row)
             _write_summary(root, rows, tags, ename)  # updated after every experiment and map
 
-    plot_sweep_summary(rows, tags, os.path.join(root, "sweep_summary.png"))
+    plot_sweep_summary(rows, tags, os.path.join(root, "sweep_summary.png"),
+                       expert_name="CBS (expert)" if ename == "CBS" else ename)
     log(f"\n[sweep] done. {os.path.join(root, 'sweep_summary.md')}")
     with open(os.path.join(root, "sweep_summary.md"), encoding="utf-8") as f:
         log(f.read())
@@ -335,7 +336,10 @@ def _write_summary(root, rows, tags, ename):
         lines += ["", "Not trained (the original CBS timed out on most validation scenarios at "
                   "this agent count, see the log; '-' in the table):"] + notes
     with open(os.path.join(root, "sweep_summary.md"), "w", encoding="utf-8") as f:
-        f.write(f"# Sweep: trained on {tags[0][1:]} agents\n\nAverage delay and makespan on the "
-                f"test set(s) {', '.join(tags)}. PP columns: original PP / learned PP / expert; "
+        targets = ", ".join(f"{m} ({a} agents)"
+                            for m, a in dict.fromkeys((r["map"], r["agents"]) for r in rows))
+        sets = " and ".join(TAG_NAMES[t].strip("()") for t in tags)
+        f.write(f"# Sweep: {targets}\n\nAverage delay and makespan on the {sets} of each map. "
+                f"PP columns: original PP / learned PP / {ename}; "
                 f"CBS columns: original CBS / CBS with learned costs. Lower is better.\n\n"
                 + "\n".join(lines) + "\n")

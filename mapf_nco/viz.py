@@ -423,34 +423,47 @@ def plot_test_summary(per_instance, methods, out_path, title, expert_name="EECBS
 
 
 def plot_sweep_summary(rows, tags, out_path):
-    """Test delay of every experiment on each test set, with PP and expert reference lines."""
+    """Test delay of every experiment, one panel per (map, agents) and test set, with the
+    original PP / CBS / expert reference lines of that map."""
     import numpy as np
 
-    names = [r["experiment"][4:] for r in rows]
-    x = np.arange(len(rows))
-    fig, axes = plt.subplots(1, len(tags), figsize=(max(7, 1.1 * len(rows) + 4) * len(tags) / 1.4,
-                                                    4.6), squeeze=False)
-    for ax, tag in zip(axes[0], tags):
-        ids = [m for m in RUN_LABELS
-               if any(np.isfinite(r.get(f"{tag}_{m}_delay", float("nan"))) for r in rows)]
-        width = 0.8 / max(1, len(ids))
-        for j, m in enumerate(ids):
-            ax.bar(x + (j - (len(ids) - 1) / 2) * width,
-                   [r.get(f"{tag}_{m}_delay", float("nan")) for r in rows], width,
-                   label=RUN_LABELS[m], color=METHOD_COLORS[RUN_LABELS[m]])
-        ax.axhline(rows[0][f"{tag}_orig_delay"], color="gray", ls="--", label="original PP")
-        cbs = rows[0].get(f"{tag}_cbs_delay", float("nan"))
-        if np.isfinite(cbs):
-            ax.axhline(cbs, color="#6a51a3", ls="-.", label="original CBS")
-        ax.axhline(rows[0][f"{tag}_expert_delay"], color="green", ls=":", label="EECBS")
-        ax.set_xticks(x)
-        ax.set_xticklabels(names)
-        ax.set_xlabel("experiment (see sweep_summary.md for its settings)")
-        ax.set_ylabel(r"delay  ($\sum_e y_e$ $-$ lower bound)")
-        ax.set_title(f"test set, {tag[1:]} agents", fontsize=10)
-        ax.grid(axis="y", alpha=0.3)
-        ax.legend(fontsize=8)
-    fig.suptitle(f"Sweep: models trained on {tags[0][1:]} agents (lower is better)", fontsize=11)
+    targets = list(dict.fromkeys((r["map"], r["agents"]) for r in rows))
+    n_exp = len({r["experiment"] for r in rows})
+    w = max(6.5, 1.1 * n_exp + 4)
+    fig, axes = plt.subplots(len(tags), len(targets), figsize=(w * len(targets) / 1.4,
+                                                               4.6 * len(tags)), squeeze=False)
+    for col, (map_name, agents) in enumerate(targets):
+        trows = [r for r in rows if (r["map"], r["agents"]) == (map_name, agents)]
+        names = [r["experiment"][4:] for r in trows]
+        x = np.arange(len(trows))
+        for row_i, tag in enumerate(tags):
+            ax = axes[row_i][col]
+            ids = [m for m in RUN_LABELS
+                   if any(np.isfinite(r.get(f"{tag}_{m}_delay", float("nan"))) for r in trows)]
+            width = 0.8 / max(1, len(ids))
+            for j, m in enumerate(ids):
+                ax.bar(x + (j - (len(ids) - 1) / 2) * width,
+                       [r.get(f"{tag}_{m}_delay", float("nan")) for r in trows], width,
+                       label=RUN_LABELS[m], color=METHOD_COLORS[RUN_LABELS[m]])
+            ref = trows[0]
+            if np.isfinite(ref.get(f"{tag}_orig_delay", float("nan"))):
+                ax.axhline(ref[f"{tag}_orig_delay"], color="gray", ls="--", label="original PP")
+            cbs = ref.get(f"{tag}_cbs_delay", float("nan"))
+            if np.isfinite(cbs):
+                ax.axhline(cbs, color="#6a51a3", ls="-.", label="original CBS")
+            if np.isfinite(ref.get(f"{tag}_expert_delay", float("nan"))):
+                ax.axhline(ref[f"{tag}_expert_delay"], color="green", ls=":", label="EECBS")
+            ax.set_xticks(x)
+            ax.set_xticklabels(names)
+            ax.set_xlabel("experiment (see sweep_summary.md for its settings)")
+            ax.set_ylabel(r"delay  ($\sum_e y_e$ $-$ lower bound)")
+            test_agents = agents if tag == "test" else ref.get("second_agents", "?")
+            ax.set_title(f"{map_name}: trained on {agents} agents\n"
+                         f"{'test set' if tag == 'test' else 'second test set'}, "
+                         f"{test_agents} agents", fontsize=10)
+            ax.grid(axis="y", alpha=0.3)
+            ax.legend(fontsize=8)
+    fig.suptitle("Sweep: test delay of every experiment (lower is better)", fontsize=11)
     fig.tight_layout()
     return _save(fig, out_path, dpi=130)
 

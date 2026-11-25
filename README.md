@@ -162,7 +162,24 @@ python main.py          # settings from configs/paper.json
 
 A sweep generates the data if needed, then runs a queue of experiments. For each hyperparameter you can give
 several values separated by commas, e.g. planner `pp, cbs` and learning rate `1e-4, 5e-4`, and it runs every
-combination (4 experiments here). Every experiment uses the agent count you selected. Each experiment:
+combination (4 experiments here).
+
+**Maps.** Every experiment runs on each map you choose; the default is all three maps in `data/`
+(`random-32-32-20`, `random-64-64-10`, `random-64-64-20`, setting `sweep_maps`). The agent count you selected
+applies to the configured map (`map_path`, random-32-32-20); on the others it follows the **agent scaling**
+(setting `agent_scaling`, several values allowed):
+
+| Agent scaling | Agents on a 64x64 map for 20 on 32x32 | Meaning |
+|---|---|---|
+| `count` (default) | 20 | the same number of agents on every map |
+| `count_scale_2` | 40 | times the side-length ratio (the 64x64 maps are twice as long) |
+| `count_scale_4` | 80 | times the area ratio (4 times the cells: the same density) |
+
+Each map and agent count gets its own data (generated first if missing) and its own `<map>/n<N>/` folder inside
+every experiment folder. The 64x64 maps have about twice as long paths, so training there is slower, and with
+many agents Python CBS (planner `cbs`/`both`) times out and its models are skipped.
+
+Each experiment, on each map:
 - trains the chosen model(s) from scratch, for each planner it uses;
 - tests them on the same saved test scenarios (you choose how many);
 - optionally (answer **y**; the default is no) also tests them on a second set of new random scenarios with a
@@ -170,9 +187,11 @@ combination (4 experiments here). Every experiment uses the agent count you sele
 
 Results go to `outputs/sweeps/exp_1/`, `exp_2/`, …: each sweep takes the smallest free number, so after
 deleting `exp_2` the next sweep is `exp_2` again. The agent count and settings are in `sweep_summary.md`.
-- **`sweep_summary.md` / `.csv`:** one row per experiment with its settings, best epochs, validation delay and both
-  tests' delays. It's updated after every experiment, so a long sweep can be checked while it runs.
-- **`sweep_summary.png`:** a bar chart of every experiment on both test sets, against original PP and EECBS.
+- **`sweep_summary.md` / `.csv`:** one row per experiment and map with its settings, map, agent count, best
+  epochs, validation delay and both tests' delays. It's updated after every experiment, so a long sweep can be
+  checked while it runs.
+- **`sweep_summary.png`:** a bar chart of every experiment, one panel per map and agent count (and test set),
+  against that map's original PP and EECBS.
 - **`exp_01_planner-pp_lr-0.0001/`, `exp_02_…/`, …:** one folder per experiment, named after the settings
   that vary in the sweep. Each holds that experiment's models, loss graphs, TensorBoard logs and comparison plots
   (`test/` and `test_n<M>/`).
@@ -194,6 +213,8 @@ The same from the command line:
 
 ```bash
 python main.py sweep --agents 50 --grid lr=1e-4,5e-4 lam=0.5,1,2 --num 25    # add --second_agents 25 for a second test set
+python main.py sweep --agents 20 --agent_scaling count count_scale_4 --grid model=edge,cell   # all three maps
+python main.py sweep --agents 20 --maps random-32-32-20 --grid lr=1e-4,5e-4                 # one map only
 ```
 
 Sweepable: model, planner, objective, makespan_tau, makespan_weight, epochs, batch_size, lr, lam, loss_reduction, w_min,

@@ -318,24 +318,44 @@ def _ask_values(prompt, default, cast):
 
 
 def menu_sweep(cfg, n, info):
-    from mapf_nco.experts import generate_datasets
-    from mapf_nco.sweep import expand_grid, run_sweep, second_agent_count
+    from mapf_nco.scenarios import dataset_path
+    from mapf_nco.sweep import (ALL_MAPS, SCALINGS, expand_grid, run_sweep,
+                                second_agent_count, sweep_targets)
 
     cfg = dict(cfg)
     print("  Sweep = generate (if needed) + a queue of experiments, each trained and tested on the")
-    print("  same scenarios. Give several values separated by commas to try them all.")
+    print("  same scenarios, on every map chosen. Give several values separated by commas to try")
+    print("  them all.")
     if not _expert_available(cfg):
         return
-    if not (info["train"] and info["test"]):
-        print("  No data for this agent count yet: generating it first.")
+    default_maps = ", ".join(cfg.get("sweep_maps", ALL_MAPS))
+    maps = _ask_values(f"  maps ({', '.join(ALL_MAPS)})", default_maps, str)
+    maps = [m.strip() for v in maps for m in v.split(",") if m.strip()]
+    print(f"  agents on the other maps, relative to {n} agents on "
+          f"{os.path.splitext(os.path.basename(cfg['map_path']))[0]}:")
+    print("    count         = the same number of agents on every map")
+    print("    count_scale_2 = times the side-length ratio (x2 on 64x64)")
+    print("    count_scale_4 = times the area ratio (x4 on 64x64, the same density)")
+    scalings = _ask_values("  agent scaling (count / count_scale_2 / count_scale_4)",
+                           ", ".join(cfg.get("agent_scaling", ["count"])), str)
+    scalings = [v.strip() for x in scalings for v in x.split(",") if v.strip()]
+    if any(v not in SCALINGS for v in scalings):
+        print("  agent scaling must be count, count_scale_2 or count_scale_4")
+        return
+    try:
+        targets = sweep_targets(cfg, n, maps, scalings)
+    except FileNotFoundError as e:
+        print(f"  {e}")
+        return
+    print("  runs on: " + "; ".join(f"{t['grid'].name} with {t['agents']} agents" for t in targets))
+    missing = [t for t in targets if not all(
+        os.path.exists(dataset_path(cfg["data_dir"], t["grid"].name, t["agents"], split))
+        for split in ("train", "test"))]
+    if missing:
+        print("  No data yet for: " + "; ".join(f"{t['grid'].name} {t['agents']} agents"
+                                               for t in missing) + " (generated first).")
         cfg["num_train"] = ask("  Number of training scenarios", cfg["num_train"], int)
         cfg["num_test"] = ask("  Number of test scenarios", cfg["num_test"], int)
-        need_data = True
-    else:
-        need_data = info["train_missing"] or info["test_missing"]
-        if need_data:
-            print("  (existing data will get its missing PP/CBS plans added)")
-            cfg["augment"] = True
     grid_values = {
         "model": _ask_values("  model (edge / potential / potential_edge / collision / cell)",
                              cfg.get("model", "edge"), str),
@@ -368,25 +388,25 @@ def menu_sweep(cfg, n, info):
     if any(v not in ("usage", "makespan", "usage+makespan") for v in grid_values["objective"]):
         print("  objective must be usage, makespan or usage+makespan")
         return
-    warn_cbs(grid_values["planner"], n)
+    warn_cbs(grid_values["planner"], max(t["agents"] for t in targets))
     k = len(expand_grid(grid_values))
-    test_count = ask("  Test scenarios per experiment (from the saved test set)",
+    test_count = ask("  Test scenarios per experiment and map (from the saved test set)",
                      min(3, info["test"] or cfg["num_test"]), int)
     second_n = second_count = None
     if ask_yes("  Also test on a second set with a different number of agents?", False):
-        second_n = ask("  Agents in the second test set", second_agent_count(n, cfg), int)
+        second_n = ask(f"  Agents in the second test set (on "
+                       f"{os.path.splitext(os.path.basename(cfg['map_path']))[0]}; scaled like "
+                       "the training count on the other maps)", second_agent_count(n, cfg), int)
         second_count = ask("  Scenarios in the second test set", test_count, int)
     animate = ask_yes("  Save animations too (slower)?", False)
     workers = ask("  Parallel workers", default_workers(), int)
-    print(f"\n  {k} experiment(s) x (train the model(s) per planner + {2 if second_n else 1} "
-          f"test(s)). "
-          f"Each training takes about epochs x (a few seconds to a minute).")
+    print(f"\n  {k} experiment(s) x {len(targets)} map(s) x (train the model(s) per planner + "
+          f"{2 if second_n else 1} test(s)). Each training takes about epochs x (a few seconds "
+          "to a minute); the 64x64 maps, with longer paths and more agents, take longer.")
     if not ask_yes("  Start?", True):
         return
-    if need_data:
-        generate_datasets(cfg, [n], workers=workers)
     root, _ = run_sweep(cfg, n, grid_values, test_count, second_n, second_count,
-                        animate=animate, workers=workers)
+                        animate=animate, workers=workers, maps=maps, scalings=scalings)
     open_file(os.path.join(root, "sweep_summary.png"))
 
 
@@ -590,7 +610,8 @@ def parse_args(argv=None):
     t.add_argument("--expert", choices=["eecbs", "cbs"])
     t.add_argument("--eecbs_bin")
 
-    w = sub.add_parser("sweep", help="queue of experiments, each tested on 2 agent counts")
+    w = sub.add_parser("sweep", help="queue of experiments on every map, each tested on the "
+                                     "saved test set (and optionally a second agent count)")
     common(w)
     w.add_argument("--grid", nargs="+", metavar="KEY=V1,V2", default=[],
                    help="values to try, e.g. lr=1e-4,5e-4 lam=0.5,1 planner=pp,cbs")
@@ -598,6 +619,13 @@ def parse_args(argv=None):
     w.add_argument("--second_agents", type=int, help="agents in the second test set")
     w.add_argument("--second_num", type=int, help="scenarios in the second test set")
     w.add_argument("--animate", action="store_true")
+    w.add_argument("--maps", nargs="+", metavar="MAP",
+                   help="maps to run on (names in data/ or paths; default: sweep_maps of the "
+                        "config, all three)")
+    w.add_argument("--agent_scaling", nargs="+", choices=["count", "count_scale_2",
+                                                          "count_scale_4"],
+                   help="agents on the other maps: the same count, x side ratio (x2 on 64x64) "
+                        "or x area ratio (x4); several to compare")
     w.add_argument("--expert", choices=["eecbs", "cbs"])
     w.add_argument("--eecbs_bin")
 
@@ -685,8 +713,7 @@ def main(argv=None):
                 test_saved(cfg, n, args.num, models or MODEL_IDS, animate=args.animate)
 
     if args.command == "sweep":
-        from mapf_nco.experts import generate_datasets
-        from mapf_nco.sweep import SWEEPABLE, run_sweep
+        from mapf_nco.sweep import ALL_MAPS, SWEEPABLE, run_sweep
 
         grid_values = {}
         for item in args.grid:
@@ -696,11 +723,13 @@ def main(argv=None):
             words = ("pp", "cbs", "both", "mean", "sum", "usage", "makespan", "usage+makespan",
                      "edge", "potential", "potential_edge", "collision", "cell")
             grid_values[key] = [v if v in words else json.loads(v) for v in vals.split(",")]
+        maps = args.maps or cfg.get("sweep_maps", list(ALL_MAPS))
+        scalings = args.agent_scaling or cfg.get("agent_scaling", ["count"])
         for n in agents:
             warn_cbs(grid_values.get("planner", cfg.get("planner")), n)
-            generate_datasets(dict(cfg, augment=True), [n], workers=workers)
             run_sweep(cfg, n, grid_values or {"lr": [cfg["lr"]]}, args.num, args.second_agents,
-                      args.second_num, animate=args.animate, workers=workers)
+                      args.second_num, animate=args.animate, workers=workers, maps=maps,
+                      scalings=scalings)
 
     if args.command == "pipeline":
         from mapf_nco.pipeline import SWEEPABLE, run_pipeline

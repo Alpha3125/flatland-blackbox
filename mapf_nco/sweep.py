@@ -1,14 +1,26 @@
-"""Sweep: one dataset, a queue of experiments, and the same tests for each.
+"""Sweep: a queue of experiments on one or more maps, with the same tests for each.
+
+Maps: every experiment runs on each map of ``maps`` (default: the configured map;
+the menu offers random-32-32-20, random-64-64-10 and random-64-64-20). The agent
+count on each map follows ``agent_scaling`` (several values allowed), relative to
+the configured map (random-32-32-20):
+
+    count           the same number of agents on every map
+    count_scale_2   times the side-length ratio  (x2 on a 64x64 map)
+    count_scale_4   times the area ratio         (x4 on a 64x64 map: the same density)
+
+Each (map, agent count) gets its own data (generated if missing) and its own
+<map>/n<N>/ folder inside every experiment folder.
 
 For every combination of the hyperparameter values given (a grid search), the
-chosen model (``model``: edge / potential / potential_edge / collision) is trained
-from scratch, for PP, CBS or both (``planner``), and then tested on
+chosen model (``model``: edge / potential / potential_edge / collision / cell) is
+trained from scratch, for PP, CBS or both (``planner``), and then tested on
 
   1. the saved test scenarios (same agent count as training), and
   2. optionally, a second set of new random scenarios with a different agent
      count (off by default: every experiment then uses the selected agent count
-     only). This set is generated once and shared by all experiments, so they
-     are compared fairly.
+     only), scaled per map like the training count. This set is generated once
+     per map and shared by all experiments, so they are compared fairly.
 
 A CBS model is skipped when the original CBS can't solve most validation
 scenarios in time (see mapf_nco.train.train); the tests then use the models that
@@ -18,10 +30,10 @@ Everything goes to ``outputs/sweeps/exp_<k>/`` (k = the smallest free number, so
 exp_2 makes the next sweep exp_2 again), and each experiment to
 ``exp_01_<the settings that vary>/`` inside it:
 
-    sweep_summary.md / .csv          one row per experiment: settings, best epochs,
-                                     validation delay, test delays and gaps
-    sweep_summary.png                test delay of every experiment (bar chart)
-    second_test.json.gz              the shared second test set
+    sweep_summary.md / .csv          one row per experiment and map: settings, map,
+                                     agents, best epochs, validation delay, test delays
+    sweep_summary.png                test delay of every experiment, one panel per map
+    second_test_<map>_n<M>.json.gz   the shared second test set of each map
     exp_01/ ... exp_K/<map>/n<N>/    models/, training/, tensorboard/,
                                      test/ and test_n<M>/ (comparison plots)
 
@@ -73,6 +85,49 @@ def next_sweep_dir(base):
     return os.path.join(base, f"exp_{k}")
 
 
+SCALINGS = ("count", "count_scale_2", "count_scale_4")
+ALL_MAPS = ("random-32-32-20", "random-64-64-10", "random-64-64-20")
+
+
+def resolve_map(cfg, name):
+    """A map name (random-64-64-10) or path -> its path (looked up next to the configured map)."""
+    if os.path.isfile(name):
+        return name
+    path = os.path.join(os.path.dirname(cfg["map_path"]) or ".",
+                        name if name.endswith(".map") else name + ".map")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"map {name!r} not found (looked for {path})")
+    return path
+
+
+def scaled_agents(n, base, grid, scaling):
+    """Agents on ``grid`` for ``n`` agents on the ``base`` map (see the module docstring)."""
+    area = (grid.width * grid.height) / (base.width * base.height)
+    if scaling == "count":
+        return n
+    if scaling == "count_scale_2":
+        return max(1, round(n * area ** 0.5))
+    if scaling == "count_scale_4":
+        return max(1, round(n * area))
+    raise ValueError(f"agent_scaling must be one of {', '.join(SCALINGS)}, not {scaling!r}")
+
+
+def sweep_targets(cfg, n, maps=None, scalings=None):
+    """The (map, agent count) pairs a sweep runs on, one per distinct pair:
+    [{map_path, grid, agents, scalings}] in the order of ``maps``."""
+    base = Grid.from_file(cfg["map_path"])
+    out = {}
+    for m in maps or [cfg["map_path"]]:
+        path = resolve_map(cfg, m)
+        g = Grid.from_file(path)
+        for sc in scalings or ["count"]:
+            key = (g.name, scaled_agents(n, base, g, sc))
+            if key not in out:
+                out[key] = {"map_path": path, "grid": g, "agents": key[1], "scalings": []}
+            out[key]["scalings"].append(sc)
+    return list(out.values())
+
+
 def second_agent_count(n, cfg):
     """Half the agents for n >= 50, otherwise the largest configured agent count."""
     if n >= 50:
@@ -91,68 +146,84 @@ def apply_settings(cfg, settings):
 
 
 def run_sweep(cfg, n, grid_values, test_count=None, second_n=None, second_count=None,
-              second_seed=777, animate=False, workers=None, log=print):
+              second_seed=777, animate=False, workers=None, log=print, maps=None, scalings=None):
+    """Run the sweep for ``n`` agents (on the configured map; scaled on the others)."""
     from mapf_nco.evaluate import run_test, test_saved
-    from mapf_nco.experts import expert_options, make_scenarios
+    from mapf_nco.experts import expert_options, generate_datasets, make_scenarios
     from mapf_nco.train import run_training
     from mapf_nco.viz import plot_sweep_summary
 
-    grid = Grid.from_file(cfg["map_path"])
+    targets = sweep_targets(cfg, n, maps, scalings)
     workers = workers or max(1, (os.cpu_count() or 2) - 1)
     experiments = expand_grid(grid_values)
     root = next_sweep_dir(os.path.join(cfg["output_dir"], "sweeps"))
     varying = [k for k, v in grid_values.items() if len(v) > 1]
     os.makedirs(root)
-    log(f"[sweep] {len(experiments)} experiment(s), {n} agents"
-        + (f"; second test on {second_n} agents" if second_n else "") + f". Results: {root}")
+    log(f"[sweep] {len(experiments)} experiment(s) on "
+        + "; ".join(f"{t['grid'].name} with {t['agents']} agents" for t in targets)
+        + (f"; second test on {second_n} agents (scaled per map)" if second_n else "")
+        + f". Results: {root}")
 
-    second, ename = None, "EECBS" if cfg.get("expert", "eecbs") == "eecbs" else "CBS"
-    if second_n:  # shared second test set (generated once)
-        expert, opts = expert_options(cfg, grid, log)
-        test_size = second_count or test_count or cfg.get("num_test", 25)
-        second_path = os.path.join(root, "second_test.json.gz")
-        second, _, _ = make_scenarios(cfg, second_n, test_size, 20_000_000 + second_seed, expert,
-                                      opts, workers, desc=f"second test set ({second_n} agents)")
-        save_dataset(second_path, grid, second, info={"num_agents": second_n, "expert": expert})
-        second, _ = load_dataset(second_path, grid)
-    tags = [f"n{n}"] + ([f"n{second_n}"] if second_n else [])
+    ename = "EECBS" if cfg.get("expert", "eecbs") == "eecbs" else "CBS"
+    for t in targets:  # data of every map (generated if missing), and its second test set
+        tcfg = dict(cfg, map_path=t["map_path"])
+        log(f"\n[sweep] data: {t['grid'].name}, {t['agents']} agents")
+        generate_datasets(dict(tcfg, augment=True), [t["agents"]], workers=workers, log=log)
+        t["second_n"] = max(1, round(second_n * t["agents"] / n)) if second_n else None
+        t["second"] = None
+        if second_n:
+            expert, opts = expert_options(tcfg, t["grid"], log)
+            test_size = second_count or test_count or cfg.get("num_test", 25)
+            path = os.path.join(root, f"second_test_{t['grid'].name}_n{t['second_n']}.json.gz")
+            sc, _, _ = make_scenarios(tcfg, t["second_n"], test_size, 20_000_000 + second_seed,
+                                      expert, opts, workers,
+                                      desc=f"second test set ({t['grid'].name}, "
+                                           f"{t['second_n']} agents)")
+            save_dataset(path, t["grid"], sc, info={"num_agents": t["second_n"], "expert": expert})
+            t["second"], _ = load_dataset(path, t["grid"])
+    tags = ["test"] + (["second"] if second_n else [])
 
     rows = []
     for i, settings in enumerate(experiments, 1):
         name = f"exp_{i:02d}"
         folder = name + "".join(f"_{_short(k)}-{_val(settings[k])}" for k in varying)
-        log(f"\n{'=' * 70}\n[sweep] {name}/{len(experiments):02d}: "
-            + ", ".join(f"{k}={v}" for k, v in settings.items()) + f"\n{'=' * 70}")
-        ecfg = apply_settings(cfg, settings)
-        ecfg["output_dir"] = os.path.join(root, folder)
-        row = {"experiment": name, **settings}
-        t0 = time.time()
-        ids = run_training(ecfg, n, workers=workers, log=log)  # skipped CBS models are left out
-        skipped = [m for m in model_ids(ecfg) if m not in ids]
-        if skipped:
-            row["not_trained"] = " / ".join(f"{planner_of(m).upper()} {KIND_LABELS[kind_of(m)]}"
-                                            for m in skipped)
-        s1 = test_saved(ecfg, n, test_count, ids, plots=True, animate=animate, log=log)
-        summaries = [s1]
-        if second_n:
-            summaries.append(run_test(ecfg, grid, n, second, ename,
-                                      f"{len(second)} new random scenarios, {second_n} agents",
-                                      ids, True, animate, log,
-                                      out_name=f"test_n{second_n}"))
-        row.update(_best_epochs(ecfg, grid, n, ids))
-        for tag, s in zip(tags, summaries):
-            for m in ("orig", "cbs") + MODEL_IDS:
-                if f"{m}_delay" not in s:
-                    continue
-                row[f"{tag}_{m}_delay"] = round(s.get(f"{m}_delay", float("nan")), 2)
-                row[f"{tag}_{m}_makespan"] = round(s.get(f"{m}_makespan", float("nan")), 2)
-                if m not in ("orig", "cbs"):
-                    row[f"{tag}_{m}_gap"] = round(s.get(f"{m}_gap", float("nan")), 1)
-            row[f"{tag}_expert_delay"] = round(s["expert_delay"], 2)
-            row[f"{tag}_expert_makespan"] = round(s.get("expert_makespan", float("nan")), 2)
-        row["minutes"] = round((time.time() - t0) / 60, 1)
-        rows.append(row)
-        _write_summary(root, rows, tags, ename)  # updated after every experiment
+        for t in targets:
+            grid, tn = t["grid"], t["agents"]
+            log(f"\n{'=' * 70}\n[sweep] {name}/{len(experiments):02d} on {grid.name}, {tn} agents: "
+                + ", ".join(f"{k}={v}" for k, v in settings.items()) + f"\n{'=' * 70}")
+            ecfg = apply_settings(dict(cfg, map_path=t["map_path"]), settings)
+            ecfg["output_dir"] = os.path.join(root, folder)
+            row = {"experiment": name, "map": grid.name, "agents": tn,
+                   "scaling": "/".join(t["scalings"]), **settings}
+            if t["second_n"]:
+                row["second_agents"] = t["second_n"]
+            t0 = time.time()
+            ids = run_training(ecfg, tn, workers=workers, log=log)  # skipped CBS models left out
+            skipped = [m for m in model_ids(ecfg) if m not in ids]
+            if skipped:
+                row["not_trained"] = " / ".join(
+                    f"{planner_of(m).upper()} {KIND_LABELS[kind_of(m)]}" for m in skipped)
+            s1 = test_saved(ecfg, tn, test_count, ids, plots=True, animate=animate, log=log)
+            summaries = [s1]
+            if t["second"] is not None:
+                summaries.append(run_test(ecfg, grid, tn, t["second"], ename,
+                                          f"{len(t['second'])} new random scenarios, "
+                                          f"{t['second_n']} agents", ids, True, animate, log,
+                                          out_name=f"test_n{t['second_n']}"))
+            row.update(_best_epochs(ecfg, grid, tn, ids))
+            for tag, s in zip(tags, summaries):
+                for m in ("orig", "cbs") + MODEL_IDS:
+                    if f"{m}_delay" not in s:
+                        continue
+                    row[f"{tag}_{m}_delay"] = round(s.get(f"{m}_delay", float("nan")), 2)
+                    row[f"{tag}_{m}_makespan"] = round(s.get(f"{m}_makespan", float("nan")), 2)
+                    if m not in ("orig", "cbs"):
+                        row[f"{tag}_{m}_gap"] = round(s.get(f"{m}_gap", float("nan")), 1)
+                row[f"{tag}_expert_delay"] = round(s["expert_delay"], 2)
+                row[f"{tag}_expert_makespan"] = round(s.get("expert_makespan", float("nan")), 2)
+            row["minutes"] = round((time.time() - t0) / 60, 1)
+            rows.append(row)
+            _write_summary(root, rows, tags, ename)  # updated after every experiment and map
 
     plot_sweep_summary(rows, tags, os.path.join(root, "sweep_summary.png"))
     log(f"\n[sweep] done. {os.path.join(root, 'sweep_summary.md')}")
@@ -214,6 +285,9 @@ def _best_epochs(cfg, grid, n, ids):
     return out
 
 
+TAG_NAMES = {"test": "(test set)", "second": "(second test set)"}
+
+
 def _write_summary(root, rows, tags, ename):
     if ename == "CBS":  # Python CBS as the expert: don't confuse it with the original-CBS column
         ename = "CBS (expert)"
@@ -222,7 +296,9 @@ def _write_summary(root, rows, tags, ename):
         w = csv.DictWriter(f, fieldnames=keys)
         w.writeheader()
         w.writerows(rows)
-    settings = [k for k in keys if k in SWEEPABLE]
+    settings = ["map", "agents"] + (["second_agents"] if "second_agents" in keys else []) \
+        + (["scaling"] if len({r.get("scaling") for r in rows}) > 1 else []) \
+        + [k for k in keys if k in SWEEPABLE]
     ids = [m for m in MODEL_IDS
            if any(f"{m}_best_epoch" in r for r in rows)]
     names = {m: f"{planner_of(m).upper()} {KIND_LABELS[kind_of(m)]}" for m in MODEL_IDS}
@@ -240,11 +316,11 @@ def _write_summary(root, rows, tags, ename):
         groups.append((f"PP / {ename}", ["orig", "expert"]))
     head = (["exp"] + settings + ["best ep. " + " / ".join(names[m] for m in ids),
                                   "val delay " + " / ".join(names[m] for m in ids)]
-            + [f"delay {t}: {g}" for t in tags for g, _ in groups]
-            + [f"makespan {t}: {g}" for t in tags for g, _ in groups] + ["min"])
+            + [f"delay {TAG_NAMES[t]}: {g}" for t in tags for g, _ in groups]
+            + [f"makespan {TAG_NAMES[t]}: {g}" for t in tags for g, _ in groups] + ["min"])
     lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
     for r in rows:
-        cells = [r["experiment"][4:]] + [str(r[k]) for k in settings]
+        cells = [r["experiment"][4:]] + [str(r.get(k, "-")) for k in settings]
         cells.append(" / ".join(str(r.get(f"{m}_best_epoch", "-")) for m in ids))
         cells.append(" / ".join(str(r.get(f"{m}_val_delay", "-")) for m in ids))
         for what in ("delay", "makespan"):

@@ -44,6 +44,9 @@
   "seed": 0,
   "device": "cpu",
 
+  "sweep_maps": ["random-32-32-20", "random-64-64-10", "random-64-64-20"],
+  "agent_scaling": ["count"],
+
   "scp_dest": "C:\\Users\\Alpha\\Downloads\\",
   "scp_user": null,
   "scp_host": null

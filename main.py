@@ -318,17 +318,12 @@ def _ask_values(prompt, default, cast):
         print("  enter one value, or several separated by commas")
 
 
-def menu_sweep(cfg, n, info):
+def _ask_targets(cfg, n):
+    """Maps, agent scaling and start/goal positions for a sweep (sets cfg["positions"],
+    and the data sizes when data is missing). Returns (maps, scalings, targets) or None."""
     from mapf_nco.scenarios import POSITIONS, data_dir_for, dataset_path
-    from mapf_nco.sweep import (ALL_MAPS, SCALINGS, expand_grid, run_sweep,
-                                second_agent_count, sweep_targets)
+    from mapf_nco.sweep import ALL_MAPS, SCALINGS, sweep_targets
 
-    cfg = dict(cfg)
-    print("  Sweep = generate (if needed) + a queue of experiments, each trained and tested on the")
-    print("  same scenarios, on every map chosen. Give several values separated by commas to try")
-    print("  them all.")
-    if not _expert_available(cfg):
-        return
     default_maps = ", ".join(cfg.get("sweep_maps", ALL_MAPS))
     maps = _ask_values(f"  maps ({', '.join(ALL_MAPS)})", default_maps, str)
     maps = [m.strip() for v in maps for m in v.split(",") if m.strip()]
@@ -342,12 +337,12 @@ def menu_sweep(cfg, n, info):
     scalings = [v.strip() for x in scalings for v in x.split(",") if v.strip()]
     if any(v not in SCALINGS for v in scalings):
         print("  agent scaling must be count, count_scale_2 or count_scale_4")
-        return
+        return None
     try:
         targets = sweep_targets(cfg, n, maps, scalings)
     except FileNotFoundError as e:
         print(f"  {e}")
-        return
+        return None
     print("  runs on: " + "; ".join(f"{t['grid'].name} with {t['agents']} agents" for t in targets))
     print("  start/goal positions:")
     print("    randomized = new random starts and goals for every instance")
@@ -365,6 +360,23 @@ def menu_sweep(cfg, n, info):
         copies = " (copies of the fixed scenario)" if fixed else ""
         cfg["num_train"] = ask(f"  Number of training scenarios{copies}", cfg["num_train"], int)
         cfg["num_test"] = ask(f"  Number of test scenarios{copies}", cfg["num_test"], int)
+    return maps, scalings, targets
+
+
+def menu_sweep(cfg, n, info):
+    from mapf_nco.sweep import expand_grid, run_sweep, second_agent_count
+
+    cfg = dict(cfg)
+    print("  Sweep = generate (if needed) + a queue of experiments, each trained and tested on the")
+    print("  same scenarios, on every map chosen. Give several values separated by commas to try")
+    print("  them all.")
+    if not _expert_available(cfg):
+        return
+    chosen = _ask_targets(cfg, n)
+    if chosen is None:
+        return
+    maps, scalings, targets = chosen
+    fixed = cfg["positions"] == "fixed"
     grid_values = {
         "model": _ask_values("  model (edge / potential / potential_edge / collision / cell)",
                              cfg.get("model", "edge"), str),
@@ -421,6 +433,51 @@ def menu_sweep(cfg, n, info):
     root, _ = run_sweep(cfg, n, grid_values, test_count, second_n, second_count,
                         animate=animate, workers=workers, maps=maps, scalings=scalings)
     open_file(os.path.join(root, "sweep_summary.png"))
+
+
+def menu_cbs_collision(cfg, n, info):
+    from mapf_nco.cbs_collision import run_collision_sweep
+    from mapf_nco.sweep import expand_grid
+
+    cfg = dict(cfg)
+    print("  CBS collision framework (a sweep like option 5). Each experiment learns edge costs")
+    print("  for weighted CBS so that it resolves fewer conflicts (the loss), with the paper's")
+    print("  black-box gradient: costs go up where CBS had to resolve collisions. Every epoch it")
+    print("  plots CBS's conflicts, its planning time, and the plan's cost on the original graph")
+    print("  (epoch 0 = unit costs = optimal CBS). Several values separated by commas: all tried.")
+    if not _expert_available(cfg):
+        return
+    chosen = _ask_targets(cfg, n)
+    if chosen is None:
+        return
+    maps, scalings, targets = chosen
+    grid_values = {
+        "model": _ask_values("  model (edge / cell)", "edge", str),
+        "epochs": _ask_values("  epochs", cfg["epochs"], int),
+        "batch_size": _ask_values("  batch size", cfg["batch_size"], int),
+        "lr": _ask_values("  learning rate", cfg["lr"], float),
+        "lam": _ask_values("  lambda (how much a resolved conflict raises an edge's cost in "
+                           "the perturbed solve)", cfg["lam"], float),
+        "cbs_time_limit": _ask_values("  CBS time limit per solve, seconds",
+                                      cfg.get("cbs_time_limit", 60), float),
+        "w_min": _ask_values("  w_min", cfg["w_min"], float),
+        "val_fraction": _ask_values("  validation fraction", cfg["val_fraction"], float),
+        "seed": _ask_values("  seed", cfg["seed"], int),
+    }
+    if any(v not in ("edge", "cell") for v in grid_values["model"]):
+        print("  model must be edge or cell")
+        return
+    test_count = None if cfg["positions"] == "fixed" else ask(
+        "  Test scenarios per experiment and map (from the saved test set)",
+        min(10, info["test"] or cfg["num_test"]), int)
+    workers = ask("  Parallel workers", default_workers(), int)
+    print(f"\n  {len(expand_grid(grid_values))} experiment(s) x {len(targets)} map(s); each "
+          "training step solves every scenario twice with CBS, so keep the agent count small.")
+    if not ask_yes("  Start?", True):
+        return
+    root, _ = run_collision_sweep(cfg, n, grid_values, test_count, workers=workers, maps=maps,
+                                  scalings=scalings)
+    open_file(os.path.join(root, "cbs_collision_summary.png"))
 
 
 def clear_outputs(cfg, what, map_name=None, n=None):
@@ -527,8 +584,9 @@ def interactive(config_path):
   5) Sweep: generate + queue of experiments + tests
   6) Clear outputs (models, plots, results; generated data is kept)
   7) Potentials for CBS (sweep): learn on PP delay, test CBS with them as tie-breaker
+  8) CBS collision framework (sweep): learn costs so CBS resolves fewer conflicts
   0) Quit""")
-        c = ask("Choose", None, int, [0, 1, 2, 3, 4, 5, 6, 7])
+        c = ask("Choose", None, int, [0, 1, 2, 3, 4, 5, 6, 7, 8])
         try:
             if c == 0:
                 return
@@ -546,6 +604,8 @@ def interactive(config_path):
                 menu_clear(cfg, n, info)
             elif c == 7:
                 menu_pipeline(cfg, n, info)
+            elif c == 8:
+                menu_cbs_collision(cfg, n, info)
         except KeyboardInterrupt:
             print("\n  (interrupted, back to menu)")
         except Exception as e:  # keep the menu alive, show what went wrong
@@ -645,6 +705,19 @@ def parse_args(argv=None):
                         "and experiment")
     w.add_argument("--expert", choices=["eecbs", "cbs"])
     w.add_argument("--eecbs_bin")
+
+    k = sub.add_parser("cbs_collision", help="CBS collision framework: learn costs so that "
+                                             "weighted CBS resolves fewer conflicts (a sweep)")
+    common(k)
+    k.add_argument("--grid", nargs="+", metavar="KEY=V1,V2", default=[],
+                   help="values to try, e.g. model=edge,cell lam=0.5,1 lr=1e-4,5e-4")
+    k.add_argument("--num", type=int, help="saved test instances per experiment")
+    k.add_argument("--maps", nargs="+", metavar="MAP", help="maps (default: sweep_maps)")
+    k.add_argument("--agent_scaling", nargs="+", choices=["count", "count_scale_2",
+                                                          "count_scale_4"])
+    k.add_argument("--positions", choices=["randomized", "fixed"])
+    k.add_argument("--expert", choices=["eecbs", "cbs"])
+    k.add_argument("--eecbs_bin")
 
     c = sub.add_parser("clean", help="delete outputs (models, plots, results); data/ is kept")
     common(c)
@@ -749,6 +822,24 @@ def main(argv=None):
             run_sweep(cfg, n, grid_values or {"lr": [cfg["lr"]]}, args.num, args.second_agents,
                       args.second_num, animate=args.animate, workers=workers, maps=maps,
                       scalings=scalings)
+
+    if args.command == "cbs_collision":
+        from mapf_nco.cbs_collision import SWEEPABLE as CC_SWEEPABLE, run_collision_sweep
+        from mapf_nco.sweep import ALL_MAPS
+
+        grid_values = {}
+        for item in args.grid:
+            key, _, vals = item.partition("=")
+            if key not in CC_SWEEPABLE:
+                raise SystemExit(f"cannot sweep '{key}'; choose from {', '.join(CC_SWEEPABLE)}")
+            grid_values[key] = [v if key == "model" else json.loads(v) for v in vals.split(",")]
+        if args.positions:
+            cfg["positions"] = args.positions
+        maps = args.maps or cfg.get("sweep_maps", list(ALL_MAPS))
+        scalings = args.agent_scaling or cfg.get("agent_scaling", ["count"])
+        for n in agents:
+            run_collision_sweep(cfg, n, grid_values or {"model": [cfg.get("model", "edge")]},
+                                args.num, workers=workers, maps=maps, scalings=scalings)
 
     if args.command == "pipeline":
         from mapf_nco.pipeline import SWEEPABLE, run_pipeline

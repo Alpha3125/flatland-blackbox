@@ -112,6 +112,7 @@ python main.py          # settings from configs/paper.json
   5) Sweep: generate + queue of experiments + tests
   6) Clear outputs (models, plots, results; generated data is kept)
   7) Potentials for CBS (sweep): learn on PP delay, test CBS with them as tie-breaker
+  8) CBS collision framework (sweep): learn costs so CBS resolves fewer conflicts
   0) Quit
 ```
 
@@ -247,6 +248,7 @@ python main.py evaluate   --agents 50 75 100              # paper's Table 1, no 
 python main.py pipeline   --agents 25                     # potentials for CBS (both models)
 python main.py pipeline   --agents 10 20 --grid seed=0,1 models=collision,both   # 8 experiments
 python main.py pipeline   --agents 30 --model collision --cbs_test 30 --time_limit 30 --animate
+python main.py cbs_collision --agents 10 --maps random-32-32-20 --grid model=edge,cell lam=0.5,1
 python main.py clean      --agents 50 --what agents       # or sweeps / pipeline / all; --yes skips the prompt
 ```
 
@@ -282,6 +284,7 @@ outputs/random-32-32-20/n50/          every file starts with the name of its fol
         test_instance_000_animation.gif   with --animate
     test_n<M>/                      a sweep's second test set (same file names)
 outputs/sweeps/exp_<k>/            option 5 (sweep): sweep_summary.*, exp_01_<settings>/ ...
+outputs/cbs_collision/exp_<k>/     option 8: cbs_collision_summary.*, exp_01_<settings>/ ...
 outputs/results/table1.md           from `main.py evaluate`
 ```
 
@@ -587,6 +590,41 @@ Settings (`configs/paper.json`, or the menu / command-line options): `pipeline_m
 Python CBS is slow beyond about 25 agents; there, the CBS part mostly compares how many scenarios each
 version solves.
 
+## CBS collision framework
+
+CBS's run time grows with the number of conflicts it has to resolve (one per search node it expands). This
+mode learns edge costs for **weighted CBS** (CBS that finds the plan with the smallest total learned cost) so
+that it resolves fewer conflicts, and shows what that does to its planning time and to the plan's real cost.
+Menu option 8, or `python main.py cbs_collision`.
+
+| | |
+|---|---|
+| Loss | N(w): the number of conflicts CBS resolves with the costs w |
+| Conflict heat c | for every conflict CBS resolved, +1 on the edge each of the two colliding agents used (into the shared cell, or the two opposite moves of a swap) |
+| Gradient | the paper's black-box method with dL/dy = c: perturbed costs w' = w + λ·c, dL/dw ≈ −(y(w) − y(w'))/λ |
+| Effect | costs go up where CBS had to resolve collisions; w moves toward the plan that avoids them |
+| Models | `edge` (one cost per edge) or `cell` (one heat value per cell) |
+
+N has no gradient of its own, so c stands in for it. Every training scenario is solved twice by CBS (with w
+and with w'), so keep the agent count small with Python CBS. A scenario without conflicts gives no gradient.
+
+After every epoch the validation scenarios are solved with the current costs and three things are recorded:
+the conflicts CBS resolves, its wall-clock planning time, and the plan's **delay on the original graph** (sum
+of costs − lower bound, every move and wait costing 1). Epoch 0 is unit costs, i.e. plain optimal CBS, so it is
+the reference for all three. The model kept is the epoch with the fewest conflicts on validation (ties: the
+faster one). The test compares CBS with unit costs and with the learned costs on the saved test scenarios.
+
+It runs as a sweep like option 5: maps, agent scaling and start/goal positions are asked the same way.
+Sweepable: `model`, `epochs`, `batch_size`, `lr`, `lam`, `cbs_time_limit`, `w_min`, `val_fraction`, `seed`. A
+solve that hits `cbs_time_limit` counts with the time limit and the conflicts resolved so far, is left out of
+the delay, and is reported as a timeout. Output, in `outputs/cbs_collision/exp_<k>/`:
+
+- `cbs_collision_summary.md / .csv / .png`: one row per experiment and map (conflicts, CBS time and delay:
+  unit costs against learned costs; timeouts).
+- `exp_01_<settings>/<map>/n<N>/training/training_curves.png`: conflicts (training and validation), CBS time
+  and delay per epoch, with unit costs as the reference line; `training_history.csv / .json`.
+- `.../test/test_summary.md`, `test_per_instance.csv`, `test_summary.png` (per instance).
+
 ## Choices where the paper leaves details open
 
 These are documented so they can be changed if the authors clarify them:
@@ -627,6 +665,8 @@ mapf_nco/
                         tie-breaking CBS (plain / conflict-avoidance table / learned costs)
   delay_search.py       potential / collision strengths found by direct search on PP's delay
   pipeline.py           option 7: potentials for CBS, a sweep (search, PP and CBS tests, plots)
+  cbs_collision.py      option 8: CBS collision framework (learn costs so CBS resolves fewer
+                        conflicts), a sweep with its training, tests and plots
   planners.py           model (edge / potential / potential_edge) and planner (pp / cbs / both) settings, model ids
   potential.py          map features of the potential model (obstructions, single-lane passages, lanes)
   hotspots.py           where collisions were avoided: waits, close calls, naive collisions

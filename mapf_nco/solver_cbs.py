@@ -153,12 +153,14 @@ class ConflictTable:
         return n
 
 
-def _cbs(grid, starts, goals, ws, hs, time_limit, max_nodes, plan=None):
+def _cbs(grid, starts, goals, ws, hs, time_limit, max_nodes, plan=None, on_conflict=None):
     """High-level CBS. ``ws[i]``/``hs[i]``: agent i's costs and heuristic.
 
     ``plan(i, vcons, econs, max_t, paths)``: low-level search for agent i (default:
     :func:`_low_level` with ws[i], hs[i]); ``paths`` are the other agents' current
     paths (at the root: the agents planned so far).
+    ``on_conflict(conflict, paths)``: called for every conflict CBS resolves (one per
+    expanded node that still has a conflict), e.g. to count where collisions happen.
     Returns (paths, high-level nodes expanded); paths is None on timeout.
     """
     if plan is None:
@@ -185,6 +187,8 @@ def _cbs(grid, starts, goals, ws, hs, time_limit, max_nodes, plan=None):
         conflicts = find_conflicts(paths, max_conflicts=1)
         if not conflicts:
             return paths, expanded
+        if on_conflict is not None:
+            on_conflict(conflicts[0], paths)
         kind, t, i, j, where = conflicts[0]
         for agent in (i, j):
             vc, ec = cons[agent]
@@ -213,8 +217,30 @@ def solve_cbs(grid, starts, goals, time_limit=60.0, max_nodes=200000):
     return _cbs(grid, starts, goals, [None] * n, [None] * n, time_limit, max_nodes)[0]
 
 
+def conflict_edges(grid, conflict, paths):
+    """The directed edges (waits included) the two agents of a CBS conflict use when
+    they collide: the edge into the shared cell (vertex conflict), or the two
+    opposite moves (swap)."""
+    kind, t, i, j, where = conflict
+    if kind != "vertex":
+        u, v = where
+        return [int(grid.edge_matrix[u, v]), int(grid.edge_matrix[v, u])]
+    if t == 0:
+        return []
+
+    def at(p, k):
+        return p[k] if k < len(p) else p[-1]
+    return [int(grid.edge_matrix[at(paths[a], t - 1), at(paths[a], t)]) for a in (i, j)]
+
+
 class WeightedCBS:
-    """CBS that minimises the total learned edge cost (downstream planner)."""
+    """CBS that minimises the total learned edge cost (downstream planner).
+
+    After each solve: ``last_nodes`` (high-level nodes expanded), ``last_conflicts``
+    (conflicts resolved) and ``last_conflict_edges`` (the edges of the two colliding
+    agents for every resolved conflict, see :func:`conflict_edges`), also when the
+    solve timed out.
+    """
 
     def __init__(self, grid, w_min=1e-3, time_limit=10.0, max_nodes=200000):
         self.grid = grid
@@ -222,6 +248,8 @@ class WeightedCBS:
         self.time_limit = float(time_limit)
         self.max_nodes = int(max_nodes)
         self.last_nodes = 0  # high-level nodes expanded by the last solve
+        self.last_conflicts = 0
+        self.last_conflict_edges = []
 
     def solve(self, starts, goals, order=None, weights=None, agent_offsets=None):
         """Plan all agents; ``order`` is ignored. Raises NoSolutionError on timeout.
@@ -248,8 +276,14 @@ class WeightedCBS:
                     wi, hi = base, shared[i]
                 ws.append(wi)
                 hs.append(hi)
+        hits = []
+
+        def record(conflict, node_paths):
+            hits.append(conflict_edges(grid, conflict, node_paths))
         paths, self.last_nodes = _cbs(grid, starts, goals, ws, hs, self.time_limit,
-                                      self.max_nodes)
+                                      self.max_nodes, on_conflict=record)
+        self.last_conflicts = len(hits)
+        self.last_conflict_edges = [e for h in hits for e in h]
         if paths is None:
             raise NoSolutionError(-1, f"CBS found no plan within {self.time_limit:g} s")
         return paths

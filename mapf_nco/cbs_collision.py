@@ -254,7 +254,10 @@ def test_collision(cfg, n, kind, num=None, workers=1, log=print):
     limit = float(cfg.get("cbs_time_limit", 60))
     runner = Runner(cfg["map_path"], cfg["w_min"], limit, workers)
     try:
-        orig = runner.map(_eval_task, [(s.starts, s.goals, None) for s in test])
+        # unit costs through the same weighted code path as the learned costs (as epoch 0),
+        # so tie-breaking and timing differences come from the costs only
+        ones = np.ones(grid.num_edges)
+        orig = runner.map(_eval_task, [(s.starts, s.goals, ones) for s in test])
         learned = runner.map(_eval_task, [(s.starts, s.goals, w) for s in test])
     finally:
         runner.close()
